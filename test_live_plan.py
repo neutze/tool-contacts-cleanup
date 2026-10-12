@@ -75,6 +75,12 @@ class CompleteNames(unittest.TestCase):
         self.assertEqual(got, {"people/0": ("Dario", "Mr D"), "people/1": ("Pero", "Kovac"),
                                "people/2": ("Taxi", "Isar Funk"), "people/3": ("Dennis", "Herr")})
 
+    def test_full_name_in_the_first_name_field_is_split(self):
+        pl = plan({"names": [{"givenName": "Charles Njofack"}]}, {"names": [{"givenName": "Walk The Cat 2"}]})
+        lp.complete_names(pl)
+        self.assertEqual(pl.sets["people/0"]["names"]["familyName"], "Njofack")
+        self.assertNotIn("people/1", pl.sets)
+
     def test_proper_name_from_an_earlier_source_is_kept(self):
         pl = plan({"names": [{"givenName": "Abdellah"}], "nicknames": [{"value": "Abdi"}]})
         pl.sets["people/0"]["names"] = {"givenName": "Abdellah", "middleName": "", "familyName": "Benali"}

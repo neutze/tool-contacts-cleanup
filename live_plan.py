@@ -249,6 +249,14 @@ def complete_names(plan: Plan, push_rows: list = ()) -> None:
         given, family = (n.get("givenName") or "").strip(), (n.get("familyName") or "").strip()
         if given and family or not (given or family):
             continue
+        from contacts_cleanup import real_name
+        words = given.split()
+        if not family and len(words) >= 2 and real_name(words[0], " ".join(words[1:])):
+            # "Charles Njofack" typed into the first-name field: split, don't invent
+            plan.change(rn, "names", {"givenName": words[0], "middleName": n.get("middleName", ""),
+                                      "familyName": " ".join(words[1:])}, "complete names",
+                        f"{given} -> {words[0]} | {' '.join(words[1:])}")
+            continue
         pushes = [by_phone.get(phone_key(x["value"]), "") for x in p.get("phoneNumbers", [])]
         hints = [clean_name(x.get("value", "")) for x in p.get("nicknames", [])] + [x for x in pushes if x] \
             + [clean_name(o.get("name", "")) for o in p.get("organizations", [])]
