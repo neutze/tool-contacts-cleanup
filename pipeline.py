@@ -198,17 +198,20 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
     since = (dt.date.today() - dt.timedelta(days=int(cfg["active_years"] * 365))).isoformat()
     people = ps.fetch_all(api, ps.FULL_FIELDS)
     own = tuple(cfg.get("own_domains", []))
-    others, rescued = [], set()
+    others, rescued, rescue = [], set(), []
+    wa_files = whatsapp_inputs(args.whatsapp, work) if args.whatsapp else None
     if getattr(args, "other_contacts", False):
         others = google_extras.other_contacts(api)
-        rescue = google_extras.rescue_by_name(people, others, own)
-        if rescue:
-            # A name-only card whose email sits in Other contacts gets it before anything is judged.
-            ps.run({"export_counts": {}, "deletes": [], "updates": rescue}, api, args.apply, work / "rescue")
-            if args.apply:
-                people = ps.fetch_all(api, ps.FULL_FIELDS)
-            else:
-                rescued = {u["fp"] for u in rescue}
+        rescue += google_extras.rescue_by_name(people, others, own)
+    if wa_files:
+        rescue += rescue_by_whatsapp(people, live_plan.read_csv(wa_files[0]), {u["fp"] for u in rescue})
+    if rescue:
+        # A name-only card that another source can reach gets that email or number before anything is judged.
+        ps.run({"export_counts": {}, "deletes": [], "updates": rescue}, api, args.apply, work / "rescue")
+        if args.apply:
+            people = ps.fetch_all(api, ps.FULL_FIELDS)
+        else:
+            rescued = {u["fp"] for u in rescue}
     write_rows(work / "contacts.csv", to_rows(people, group_names(api)))
 
     activity = list(args.activity or [])
@@ -217,7 +220,6 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
         mailed = gmail_activity(gmail_api, since)
         write_activity(work / "gmail_activity.csv", mailed)
         activity.append(work / "gmail_activity.csv")
-    wa_files = whatsapp_inputs(args.whatsapp, work) if args.whatsapp else None
     if wa_files:
         activity.append(wa_files[0])
 
@@ -264,6 +266,15 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
     if wa_files:
         summary["photos"] = ps.run_photos(api, wa_files[2], args.apply, work)
     return summary
+
+
+def rescue_by_whatsapp(people: list, wa_rows: list, skip: set) -> list:
+    """A phone for a name-only card whose full name is exactly one WhatsApp profile name."""
+    pl = live_plan.Plan([p for p in people if ps.person_fingerprint(p) not in skip])
+    live_plan.whatsapp(pl, wa_rows)
+    return [{"fp": ps.person_fingerprint(pl.people[rn]), "name": (pl.people[rn].get("names") or [{}])[0].get(
+        "displayName", ""), "set": {"phoneNumbers": s["phoneNumbers"]}, "add_labels": []}
+            for rn, s in pl.sets.items() if "phoneNumbers" in s]
 
 
 def merge(plan: dict, extra: dict) -> None:

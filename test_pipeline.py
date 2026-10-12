@@ -114,6 +114,15 @@ class Merge(unittest.TestCase):
         self.assertIn("Friends", labels_of(api, kept))
 
 
+class WhatsAppRescue(unittest.TestCase):
+    def test_name_only_card_gets_the_number_instead_of_being_deleted(self):
+        people = [person("people/1", "Dora", "Weiss"), person("people/2", "Emil", "Brandt")]
+        rows = [{"key": "+4917012345678", "push_name": "Dora Weiss"}, {"key": "+4917099999999", "push_name": "emil"}]
+        out = pipeline.rescue_by_whatsapp(people, rows, set())
+        self.assertEqual([(u["name"], u["set"]["phoneNumbers"][0]["value"]) for u in out],
+                         [("Dora Weiss", "+4917012345678")])
+
+
 class Gmail(unittest.TestCase):
     def test_sent_headers_become_activity(self):
         class G:
