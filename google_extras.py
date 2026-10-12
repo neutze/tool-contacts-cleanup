@@ -13,9 +13,28 @@ Google confirms in full are written; the rest are listed.
 from __future__ import annotations
 
 import json
+import re
 import urllib.request
 
 import people_sync as ps
+from contacts_cleanup import is_noreply
+
+ROLE = re.compile(r"^(info|service|kundenservice|kunde|kunden|support|hello|hallo|contact|kontakt|office|mail|team|"
+                  r"people|jobs|career|karriere|bewerbung|anfrage|anfragen|booking|buchung|reservierung|rechnung|"
+                  r"billing|sales|vertrieb|order|orders|shop|reiseportal|post|empfang|rezeption|praxis|verwaltung|"
+                  r"standesamt|buergeramt|presse|newsletter|admin|webmaster)([._-].*)?$", re.I)
+RELAY = re.compile(r"[0-9a-f]{16,}", re.I)
+
+
+def wanted_address(email: str, name: str, own_domains: tuple) -> bool:
+    """A person you'd want as a contact: not yourself, not a robot, not a
+    relay alias, and not a nameless shared mailbox."""
+    local, _, domain = email.lower().partition("@")
+    if domain in own_domains or any(domain.endswith("." + d) for d in own_domains):
+        return False
+    if is_noreply(email) or RELAY.search(local):
+        return False
+    return bool(name.strip()) or not ROLE.match(local)
 
 OTHER_SCOPE = "https://www.googleapis.com/auth/contacts.other.readonly"
 VALIDATE = "https://addressvalidation.googleapis.com/v1:validateAddress"
@@ -36,18 +55,42 @@ def other_contacts(api) -> list:
             return out
 
 
-def worth_keeping(others: list, people: list, activity: dict, since: str) -> tuple:
+def worth_keeping(others: list, people: list, activity: dict, since: str, own_domains=()) -> tuple:
     """(to copy, everything else). activity: lowercased address -> last sent date."""
     known = {e["value"].strip().lower() for p in people for e in p.get("emailAddresses", [])}
     keep, rest = [], []
     for o in others:
         emails = [e["value"].strip().lower() for e in o.get("emailAddresses", [])]
+        name = (o.get("names") or [{}])[0].get("displayName", "")
         last = max((activity.get(e, "") for e in emails), default="")
-        if emails and not set(emails) & known and last >= since:
+        if emails and not set(emails) & known and last >= since \
+                and all(wanted_address(e, name, tuple(own_domains)) for e in emails):
             keep.append((o, last))
         else:
             rest.append(o)
     return keep, rest
+
+
+def rescue_by_name(people: list, others: list, own_domains=()) -> list:
+    """Plan updates giving a contact with no phone and no email the address of
+    the one Other contact that carries exactly its full name."""
+    by_name = {}
+    for o in others:
+        name = ps.fold((o.get("names") or [{}])[0].get("displayName", ""))
+        emails = [e["value"] for e in o.get("emailAddresses", [])
+                  if wanted_address(e["value"], name, tuple(own_domains))]
+        if " " in name and emails:
+            by_name.setdefault(name, []).append(emails)
+    updates = []
+    for p in people:
+        if p.get("phoneNumbers") or p.get("emailAddresses"):
+            continue
+        n = (p.get("names") or [{}])[0]
+        found = by_name.get(ps.fold(f"{n.get('givenName', '')} {n.get('familyName', '')}"), [])
+        if len(found) == 1:
+            updates.append({"fp": ps.person_fingerprint(p), "name": n.get("displayName", ""),
+                            "set": {"emailAddresses": [{"value": e} for e in found[0]]}, "add_labels": []})
+    return updates
 
 
 def copy_others(api, keep: list, apply: bool, out) -> dict:

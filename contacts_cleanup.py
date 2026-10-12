@@ -59,7 +59,7 @@ FREEMAIL = {
 # One name part: letter-words joined by space, hyphen, apostrophe or dot,
 # optionally followed by a parenthetical such as a maiden name.
 NAME_PART = re.compile(r"^[^\W\d_]+(?:[-'’. ]+[^\W\d_]+)*\.?(?:\s*\([^\W\d_][^()\d]*\))?$")
-FLAGS = ("empty", "noreply", "dead_profile", "brand_page", "email_only", "no_contact", "real_name", "no_name", "no_phone",
+FLAGS = ("empty", "unreachable", "noreply", "dead_profile", "brand_page", "email_only", "no_contact", "real_name", "no_name", "no_phone",
          "no_email", "import_label", "active", "stale")
 
 
@@ -92,7 +92,7 @@ class Contact:
     def base_action(self) -> str:
         """The action without the activity signal, so the report can show what activity rescued."""
         f = set(self.flags)
-        if {"empty", "noreply", "stale", "brand_page"} & f or ("dead_profile" in f and "real_name" not in f):
+        if {"empty", "unreachable", "noreply", "stale", "brand_page"} & f or ("dead_profile" in f and "real_name" not in f):
             return "delete-candidate"
         if self.dup_group:
             return "merge-review"
@@ -214,6 +214,13 @@ def load_activity(paths: list) -> dict:
                 last, channels = seen.get(key, ("", set()))
                 seen[key] = (max(last, r.get("last_sent", "")), channels | {r.get("channel", "?")})
     return seen
+
+
+def mark_unreachable(contacts: list) -> None:
+    """--delete-unreachable: a card with no phone and no email can't be used to reach anyone."""
+    for c in contacts:
+        if not c.emails and not c.phones and "empty" not in c.flags:
+            c.flags.append("unreachable")
 
 
 def apply_activity(contacts: list, activity: dict, since: str) -> None:
@@ -419,6 +426,8 @@ def main(argv=None) -> int:
                     help="leave rows with this label out of cleaned.csv (repeatable, exact match)")
     ap.add_argument("--drop-flag", action="append", default=[], choices=FLAGS,
                     help="leave rows with this flag out of cleaned.csv (repeatable)")
+    ap.add_argument("--delete-unreachable", action="store_true",
+                    help="make every card without a phone and an email a delete candidate")
     ap.add_argument("--activity", action="append", default=[], metavar="CSV",
                     help="activity file(s): key,channel,sent,last_sent (repeatable)")
     ap.add_argument("--active-since", metavar="YYYY-MM-DD",
@@ -432,6 +441,8 @@ def main(argv=None) -> int:
         return 1
     for c in contacts:
         flag(c)
+    if args.delete_unreachable:
+        mark_unreachable(contacts)
     if args.activity:
         apply_activity(contacts, load_activity(args.activity), args.active_since)
     dups = find_duplicates(contacts)

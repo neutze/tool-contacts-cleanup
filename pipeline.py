@@ -99,30 +99,32 @@ def group_names(api) -> dict:
 
 def gmail_activity(api, since: str) -> list:
     """key,channel,sent,last_sent for every address you mailed since `since`,
-    from message headers only (gmail.metadata scope)."""
-    ids, token = [], None
-    after = since.replace("-", "/")
+    from message headers only. The gmail.metadata scope allows no search
+    query, so this walks the SENT label newest first and stops at `since`."""
+    seen, token = {}, None
     while True:
-        params = {"q": f"in:sent after:{after}", "maxResults": 500}
-        if token:
-            params["pageToken"] = token
+        params = [("labelIds", "SENT"), ("maxResults", 500)] + ([("pageToken", token)] if token else [])
         page = api.call("GET", "/users/me/messages", params=params)
-        ids += [m["id"] for m in page.get("messages", [])]
+        for m in page.get("messages", []):
+            msg = api.call("GET", f"/users/me/messages/{m['id']}", params=[
+                ("format", "metadata"), ("metadataHeaders", "To"), ("metadataHeaders", "Cc"),
+                ("metadataHeaders", "Bcc")])
+            day = dt.datetime.fromtimestamp(int(msg.get("internalDate", 0)) / 1000,
+                                            dt.timezone.utc).date().isoformat()
+            if day < since:
+                return rows_from(seen)
+            headers = [h["value"] for h in msg.get("payload", {}).get("headers", [])]
+            for _, addr in email.utils.getaddresses(headers):
+                addr = addr.strip().lower()
+                if "@" in addr:
+                    sent, last = seen.get(addr, (0, ""))
+                    seen[addr] = (sent + 1, max(last, day))
         token = page.get("nextPageToken")
         if not token:
-            break
-    seen = {}
-    for mid in ids:
-        msg = api.call("GET", f"/users/me/messages/{mid}", params=[
-            ("format", "metadata"), ("metadataHeaders", "To"), ("metadataHeaders", "Cc"),
-            ("metadataHeaders", "Bcc")])
-        day = dt.datetime.fromtimestamp(int(msg.get("internalDate", 0)) / 1000, dt.timezone.utc).date().isoformat()
-        headers = [h["value"] for h in msg.get("payload", {}).get("headers", [])]
-        for _, addr in email.utils.getaddresses(headers):
-            addr = addr.strip().lower()
-            if "@" in addr:
-                sent, last = seen.get(addr, (0, ""))
-                seen[addr] = (sent + 1, max(last, day))
+            return rows_from(seen)
+
+
+def rows_from(seen: dict) -> list:
     return [{"key": a, "channel": "gmail", "sent": s, "last_sent": d} for a, (s, d) in seen.items()]
 
 
@@ -195,6 +197,18 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
     work.mkdir(parents=True, exist_ok=True)
     since = (dt.date.today() - dt.timedelta(days=int(cfg["active_years"] * 365))).isoformat()
     people = ps.fetch_all(api, ps.FULL_FIELDS)
+    own = tuple(cfg.get("own_domains", []))
+    others, rescued = [], set()
+    if getattr(args, "other_contacts", False):
+        others = google_extras.other_contacts(api)
+        rescue = google_extras.rescue_by_name(people, others, own)
+        if rescue:
+            # A name-only card whose email sits in Other contacts gets it before anything is judged.
+            ps.run({"export_counts": {}, "deletes": [], "updates": rescue}, api, args.apply, work / "rescue")
+            if args.apply:
+                people = ps.fetch_all(api, ps.FULL_FIELDS)
+            else:
+                rescued = {u["fp"] for u in rescue}
     write_rows(work / "contacts.csv", to_rows(people, group_names(api)))
 
     activity = list(args.activity or [])
@@ -208,6 +222,8 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
         activity.append(wa_files[0])
 
     triage = [str(work / "contacts.csv"), "-o", str(work / "triage"), "--active-since", since]
+    if cfg.get("delete_unreachable"):
+        triage.append("--delete-unreachable")
     for a in activity:
         triage += ["--activity", str(a)]
     contacts_cleanup.main(triage)
@@ -220,8 +236,15 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
     contacts_fix.main([str(work / "triage" / "review.csv")] + fix_args(cfg, work, args, wa_files))
 
     plan = json.loads((work / "fix" / "plan.json").read_text(encoding="utf-8"))
+    plan["deletes"] = [d for d in plan["deletes"] if d["fp"] not in rescued]
     extra = live_plan.Plan(people)
     live_plan.streamline(extra)
+    seen = {r["key"].strip().lower(): r["last_sent"] for r in mailed if r.get("last_sent")}
+    if wa_files:
+        wa_rows = live_plan.read_csv(wa_files[0])
+        seen.update({ps.phone_key(r["key"]): r["last_sent"] for r in wa_rows if r.get("last_sent")})
+        live_plan.names_from_whatsapp(extra, wa_rows)
+    live_plan.recency(extra, seen, since)
     extra.write(work / "streamline.json", work / "streamline_review.csv")
     stream = json.loads((work / "streamline.json").read_text(encoding="utf-8"))
     merge(plan, stream)
@@ -234,8 +257,8 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
 
     summary = ps.run(plan, api, args.apply, work)
     if getattr(args, "other_contacts", False):
-        keep, rest = google_extras.worth_keeping(google_extras.other_contacts(api), people,
-                                                 {r["key"]: r["last_sent"] for r in mailed}, since)
+        keep, rest = google_extras.worth_keeping(others, people, {r["key"]: r["last_sent"] for r in mailed},
+                                                 since, own)
         summary.update(google_extras.copy_others(api, keep, args.apply, work))
         summary["other_contacts_to_clear_by_hand"] = len(rest)
     if wa_files:

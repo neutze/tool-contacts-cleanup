@@ -59,7 +59,7 @@ class Plan:
 
     def current(self, rn: str, field: str) -> list:
         """What the plan would leave in this list field so far."""
-        return copy.deepcopy(self.sets[rn].get(field, items(self.people[rn], field)))
+        return copy.deepcopy(self.sets.get(rn, {}).get(field, items(self.people[rn], field)))
 
     def write(self, out: Path, review: Path) -> dict:
         fps = defaultdict(int)
@@ -174,6 +174,49 @@ def whatsapp(plan: Plan, rows: list) -> list:
                                   "change": " ".join(words[1:]), "source": f"whatsapp profile name '{push}'"})
                     break
     return maybe
+
+
+def recency(plan: Plan, seen: dict, since: str) -> None:
+    """Newest first. seen maps an email (lowercased) or a phone key to the date
+    it was last used (sent mail, a WhatsApp message, a dated list). On a card
+    with several emails or numbers the most recently used one moves to the
+    top, and one not used since `since` while a newer one is, is typed old."""
+    for rn, p in plan.people.items():
+        for field, key in (("emailAddresses", lambda v: v.strip().lower()), ("phoneNumbers", phone_key)):
+            current = plan.current(rn, field)
+            if len(current) < 2:
+                continue
+            dated = [(seen.get(key(x["value"]), ""), i, x) for i, x in enumerate(current)]
+            ordered = [x for _, _, x in sorted(dated, key=lambda d: (d[0] == "", "" if d[0] == "" else
+                                                                     "".join(chr(255 - ord(c)) for c in d[0]), d[1]))]
+            newest = max((d for d, _, _ in dated), default="")
+            changed = ordered != current
+            for d, _, x in dated:
+                if d and d < since <= newest and (x.get("type") or "") != "old":
+                    x["type"] = "old"
+                    changed = True
+            if changed:
+                plan.change(rn, field, ordered, "recency", ", ".join(x["value"] for x in ordered[:2]) + " first")
+
+
+def names_from_whatsapp(plan: Plan, rows: list) -> None:
+    """A WhatsApp profile name is set by the person today: when it is a proper
+    full name with the card's first name and another last name (married, say),
+    it wins."""
+    from contacts_cleanup import real_name
+    by_phone = {phone_key(r["key"]): r.get("push_name", "").strip() for r in rows if r.get("push_name", "").strip()}
+    for rn, p in plan.people.items():
+        n = (p.get("names") or [{}])[0]
+        if not n.get("givenName") or not n.get("familyName"):
+            continue
+        for x in p.get("phoneNumbers", []):
+            words = by_phone.get(phone_key(x["value"]), "").split()
+            if len(words) >= 2 and fold(words[0]) == fold(n["givenName"]) \
+                    and real_name(words[0], " ".join(words[1:])) and fold(" ".join(words[1:])) != fold(n["familyName"]):
+                plan.change(rn, "names", {"givenName": n["givenName"], "middleName": n.get("middleName", ""),
+                                          "familyName": " ".join(words[1:])}, "whatsapp profile name",
+                            f"{n['familyName']} -> {' '.join(words[1:])}")
+                break
 
 
 def main(argv=None) -> int:

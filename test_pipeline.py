@@ -126,6 +126,21 @@ class Gmail(unittest.TestCase):
         self.assertEqual(rows["anna@x.de"]["sent"], 2)
         self.assertEqual(rows["anna@x.de"]["last_sent"], "2023-11-14")
 
+    def test_stops_at_the_cutoff_newest_first(self):
+        fetched = []
+
+        class G:
+            def call(self, method, path, body=None, params=None):
+                if path == "/users/me/messages":
+                    assert ("labelIds", "SENT") in params and not any(k == "q" for k, _ in params)
+                    return {"messages": [{"id": "new"}, {"id": "old"}, {"id": "older"}]}
+                fetched.append(path)
+                return {"internalDate": "1700000000000" if path.endswith("/new") else "1500000000000",
+                        "payload": {"headers": [{"name": "To", "value": "a@x.de"}]}}
+        rows = pipeline.gmail_activity(G(), "2020-01-01")
+        self.assertEqual([r["key"] for r in rows], ["a@x.de"])
+        self.assertEqual(len(fetched), 2)  # stopped at the first message before the cutoff
+
 
 if __name__ == "__main__":
     unittest.main()
