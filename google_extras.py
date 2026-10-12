@@ -93,6 +93,42 @@ def rescue_by_name(people: list, others: list, own_domains=()) -> list:
     return updates
 
 
+def attach_to_existing(people: list, others: list, own_domains=()) -> list:
+    """Plan updates adding an Other contact's email to the one card it clearly
+    belongs to: its name is that card's full name or first name plus the last
+    name's initial ("Gizem K."), or the address itself spells first and last
+    name ("kocgizem@", "anna.schmidt@")."""
+    known = {e["value"].strip().lower() for p in people for e in p.get("emailAddresses", [])}
+    cards = []
+    for p in people:
+        n = (p.get("names") or [{}])[0]
+        given, family = ps.fold(n.get("givenName", "")), ps.fold(n.get("familyName", ""))
+        if given and family:
+            cards.append((p, given, family.split()))
+    hits = {}
+    for o in others:
+        name = ps.fold((o.get("names") or [{}])[0].get("displayName", "")).replace(".", "")
+        for e in o.get("emailAddresses", []):
+            addr = e["value"].strip().lower()
+            if addr in known or not wanted_address(addr, name, tuple(own_domains)):
+                continue
+            local = re.sub(r"[^a-z]", "", ps.fold(addr.split("@")[0]))
+            words = name.split()
+            found = [p for p, given, fam in cards
+                     if (len(words) >= 2 and words[0] == given
+                         and (" ".join(words[1:]) == " ".join(fam) or (len(words[1]) == 1 and words[1] == fam[0][0])))
+                     or (len(given) >= 3 and given in local and any(len(f) >= 3 and f in local for f in fam))]
+            if len(found) == 1:
+                hits.setdefault(found[0]["resourceName"], (found[0], []))[1].append(e["value"].strip())
+    updates = []
+    for p, emails in hits.values():
+        have = [{"value": x["value"], **({"type": x["type"]} if x.get("type") else {})} for x in p.get("emailAddresses", [])]
+        updates.append({"fp": ps.person_fingerprint(p), "name": (p.get("names") or [{}])[0].get("displayName", ""),
+                        "set": {"emailAddresses": have + [{"value": v, "type": "home"} for v in dict.fromkeys(emails)]},
+                        "add_labels": []})
+    return updates
+
+
 def copy_others(api, keep: list, apply: bool, out) -> dict:
     lines = [f"COPY {(o.get('names') or [{}])[0].get('displayName', '')} <{o['emailAddresses'][0]['value']}>"
              f" last mailed {last}" for o, last in keep]

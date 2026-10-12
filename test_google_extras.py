@@ -38,6 +38,19 @@ class OtherContacts(unittest.TestCase):
         self.assertEqual(calls, [("POST", "/otherContacts/1:copyOtherContactToMyContactsGroup")])
 
 
+class Attach(unittest.TestCase):
+    def test_initial_or_address_points_to_one_card(self):
+        people = [{"resourceName": "people/1", "names": [{"givenName": "Gizem", "familyName": "Koc Neutze"}],
+                   "phoneNumbers": [{"value": "+491745726598"}]},
+                  {"resourceName": "people/2", "names": [{"givenName": "Anna", "familyName": "Schmidt"}]},
+                  {"resourceName": "people/3", "names": [{"givenName": "Anna", "familyName": "Sommer"}]}]
+        others = [{"names": [{"displayName": "Gizem K."}], "emailAddresses": [{"value": "kocgizem@gmail.com"}]},
+                  {"names": [{"displayName": ""}], "emailAddresses": [{"value": "anna.schmidt@web.de"}]},
+                  {"names": [{"displayName": "Anna S."}], "emailAddresses": [{"value": "as@x.de"}]}]  # two Anna S.
+        got = sorted([e["value"] for e in u["set"]["emailAddresses"]] for u in ge.attach_to_existing(people, others))
+        self.assertEqual(got, [["anna.schmidt@web.de"], ["kocgizem@gmail.com"]])
+
+
 class Addresses(unittest.TestCase):
     def test_only_confirmed_addresses_are_written(self):
         self.assertEqual(ge.checked({"type": "home"}, result()),

@@ -205,6 +205,8 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
     if getattr(args, "other_contacts", False):
         others = google_extras.other_contacts(api)
         rescue += google_extras.rescue_by_name(people, others, own)
+        rescued_fps = {u["fp"] for u in rescue}
+        rescue += [u for u in google_extras.attach_to_existing(people, others, own) if u["fp"] not in rescued_fps]
     if msg_rows:
         rescue += rescue_by_whatsapp(people, msg_rows, {u["fp"] for u in rescue})
     if rescue:
