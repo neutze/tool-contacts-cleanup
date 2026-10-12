@@ -47,6 +47,7 @@ import contacts_fix
 import google_extras
 import live_plan
 import merge as merging
+import messengers
 import people_sync as ps
 import whatsapp_activity as wa
 
@@ -200,11 +201,12 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
     own = tuple(cfg.get("own_domains", []))
     others, rescued, rescue = [], set(), []
     wa_files = whatsapp_inputs(args.whatsapp, work) if args.whatsapp else None
+    msg_rows = messenger_rows(args, work, wa_files)
     if getattr(args, "other_contacts", False):
         others = google_extras.other_contacts(api)
         rescue += google_extras.rescue_by_name(people, others, own)
-    if wa_files:
-        rescue += rescue_by_whatsapp(people, live_plan.read_csv(wa_files[0]), {u["fp"] for u in rescue})
+    if msg_rows:
+        rescue += rescue_by_whatsapp(people, msg_rows, {u["fp"] for u in rescue})
     if rescue:
         # A name-only card that another source can reach gets that email or number before anything is judged.
         ps.run({"export_counts": {}, "deletes": [], "updates": rescue}, api, args.apply, work / "rescue")
@@ -220,8 +222,8 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
         mailed = gmail_activity(gmail_api, since)
         write_activity(work / "gmail_activity.csv", mailed)
         activity.append(work / "gmail_activity.csv")
-    if wa_files:
-        activity.append(wa_files[0])
+    if msg_rows:
+        activity.append(messengers.write(work / "messenger_activity.csv", msg_rows))
 
     triage = [str(work / "contacts.csv"), "-o", str(work / "triage"), "--active-since", since]
     if cfg.get("delete_unreachable"):
@@ -242,14 +244,15 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
     extra = live_plan.Plan(people)
     live_plan.streamline(extra)
     seen = {r["key"].strip().lower(): r["last_sent"] for r in mailed if r.get("last_sent")}
-    if wa_files:
-        wa_rows = live_plan.read_csv(wa_files[0])
-        seen.update({ps.phone_key(r["key"]): r["last_sent"] for r in wa_rows if r.get("last_sent")})
-        live_plan.names_from_whatsapp(extra, wa_rows)
+    for r in sorted(msg_rows, key=lambda r: r.get("last_sent", "")):  # newest date wins per number
+        if r.get("last_sent"):
+            seen[ps.phone_key(r["key"])] = r["last_sent"]
+    if msg_rows:
+        live_plan.names_from_whatsapp(extra, msg_rows)
     if args.linkedin:
         _, li_rows = contacts_fix.read_csv(args.linkedin)
         live_plan.from_linkedin(extra, li_rows)
-    live_plan.complete_names(extra, wa_rows if wa_files else [])
+    live_plan.complete_names(extra, msg_rows)
     live_plan.recency(extra, seen, since)
     extra.write(work / "streamline.json", work / "streamline_review.csv")
     stream = json.loads((work / "streamline.json").read_text(encoding="utf-8"))
@@ -262,6 +265,7 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
     (work / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=1), encoding="utf-8")
 
     summary = ps.run(plan, api, args.apply, work)
+    summary["incomplete"] = write_incomplete(work / "incomplete.csv", people, plan)
     if getattr(args, "other_contacts", False):
         keep, rest = google_extras.worth_keeping(others, people, {r["key"]: r["last_sent"] for r in mailed},
                                                  since, own)
@@ -270,6 +274,47 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
     if wa_files:
         summary["photos"] = ps.run_photos(api, wa_files[2], args.apply, work)
     return summary
+
+
+def write_incomplete(path: Path, people: list, plan: dict) -> int:
+    """Cards that will still lack a first name, a last name, or any way to
+    reach them after this plan, for going through by hand."""
+    deleted = {d["fp"] for d in plan["deletes"]}
+    sets = {u["fp"]: u["set"] for u in plan["updates"]}
+    rows = []
+    for p in people:
+        fp = ps.person_fingerprint(p)
+        if fp in deleted:
+            continue
+        n = dict((p.get("names") or [{}])[0])
+        n.update(sets.get(fp, {}).get("names", {}))
+        phones = sets.get(fp, {}).get("phoneNumbers", p.get("phoneNumbers", []))
+        emails = sets.get(fp, {}).get("emailAddresses", p.get("emailAddresses", []))
+        missing = [w for w, ok in (("first name", n.get("givenName")), ("last name", n.get("familyName")),
+                                   ("phone or email", phones or emails)) if not ok]
+        if missing:
+            rows.append({"resourceName": p["resourceName"], "name": n.get("displayName") or
+                         f"{n.get('givenName', '')} {n.get('familyName', '')}".strip(),
+                         "phones": "; ".join(x["value"] for x in phones), "emails": "; ".join(e["value"] for e in emails),
+                         "company": ((p.get("organizations") or [{}])[0]).get("name", ""), "missing": ", ".join(missing)})
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["resourceName", "name", "phones", "emails", "company", "missing"])
+        w.writeheader()
+        w.writerows(rows)
+    return len(rows)
+
+
+def messenger_rows(args, work: Path, wa_files) -> list:
+    """WhatsApp, Signal and Telegram rows, newest profile name per number first."""
+    rows = live_plan.read_csv(wa_files[0]) if wa_files else []
+    if getattr(args, "signal", False):
+        rows += messengers.signal_rows()
+    if getattr(args, "telegram", None):
+        rows += messengers.telegram_rows(args.telegram)
+    rows.sort(key=lambda r: r.get("last_sent", ""), reverse=True)
+    if rows:
+        messengers.write(work / "messengers.csv", rows)
+    return rows
 
 
 def rescue_by_whatsapp(people: list, wa_rows: list, skip: set) -> list:
@@ -310,6 +355,9 @@ def main(argv=None) -> int:
                     help="use WhatsApp: the Mac's database (default) or a zip from whatsapp_activity.py --zip")
     ap.add_argument("--activity", type=Path, action="append", help="extra activity CSV (key,channel,sent,last_sent)")
     ap.add_argument("--linkedin", type=Path, help="LinkedIn Connections.csv")
+    ap.add_argument("--signal", action="store_true", help="use Signal Desktop's profile names and activity (macOS)")
+    ap.add_argument("--telegram", type=Path, metavar="RESULT_JSON",
+                    help="Telegram Desktop export (Contacts list, JSON)")
     ap.add_argument("--names", type=Path, help="filled-in work/fix/first_name_only.csv")
     ap.add_argument("--reach", type=Path, help="filled-in work/fix/reach_suggestions.csv")
     ap.add_argument("--group-labels", type=Path, help="filled-in work/fix/groups.csv")
