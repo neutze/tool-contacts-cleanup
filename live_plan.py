@@ -306,6 +306,35 @@ def from_linkedin(plan: Plan, rows: list) -> None:
                                           "familyName": last}, "linkedin", f"{n.get('familyName')} -> {last}")
 
 
+def birthdays_by_name(plan: Plan, rows: list) -> list:
+    """Birthdays from name,month,day[,year] rows (e.g. old Facebook / XING
+    birthday emails) for cards without one. Only an exact full-name match to
+    exactly one card counts; returns the rows that matched nothing."""
+    cards = defaultdict(list)
+    for rn, p in plan.people.items():
+        n = (p.get("names") or [{}])[0]
+        full = fold(f"{n.get('givenName', '')} {n.get('familyName', '')}")
+        if " " in full:
+            cards[full].append(rn)
+    names = defaultdict(list)
+    for r in rows:
+        names[fold(r["name"])].append(r)
+    unmatched = []
+    for name, found in names.items():
+        rns = cards.get(name, [])
+        dates = {(r["month"], r["day"]) for r in found}
+        if len(rns) != 1 or len(dates) != 1:
+            unmatched += found
+            continue
+        rn, r = rns[0], found[0]
+        if plan.people[rn].get("birthdays"):
+            continue
+        date = {"month": int(r["month"]), "day": int(r["day"]), **({"year": int(r["year"])} if r.get("year") else {})}
+        plan.change(rn, "birthdays", [{"date": date}], f"{r.get('source', 'list')} birthday email",
+                    "-".join(str(date[k]) for k in ("year", "month", "day") if k in date))
+    return unmatched
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("live", type=Path)

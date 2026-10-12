@@ -88,5 +88,20 @@ class CompleteNames(unittest.TestCase):
         self.assertEqual(pl.sets["people/0"]["names"]["familyName"], "Benali")
 
 
+class BirthdaysByName(unittest.TestCase):
+    def test_exact_unique_match_only(self):
+        pl = plan({"names": [{"givenName": "Anna", "familyName": "Schmidt", "displayName": "Anna Schmidt"}]},
+                  {"names": [{"givenName": "Ben", "familyName": "Okafor"}], "birthdays": [{"date": {"month": 1, "day": 1}}]},
+                  {"names": [{"givenName": "Max", "familyName": "Muster"}]},
+                  {"names": [{"givenName": "Max", "familyName": "Muster"}]})
+        rows = [{"name": "Anna Schmidt", "month": "5", "day": "1", "year": "1990", "source": "facebook"},
+                {"name": "Ben Okafor", "month": "2", "day": "2", "year": "", "source": "facebook"},
+                {"name": "Max Muster", "month": "3", "day": "3", "year": "", "source": "xing"},
+                {"name": "Nobody Here", "month": "4", "day": "4", "year": "", "source": "xing"}]
+        left = lp.birthdays_by_name(pl, rows)
+        self.assertEqual(dict(pl.sets), {"people/0": {"birthdays": [{"date": {"month": 5, "day": 1, "year": 1990}}]}})
+        self.assertEqual(sorted(r["name"] for r in left), ["Max Muster", "Nobody Here"])
+
+
 if __name__ == "__main__":
     unittest.main()
