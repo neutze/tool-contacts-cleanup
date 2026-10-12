@@ -256,3 +256,30 @@ class Gravatar(unittest.TestCase):
         ps.gravatar(people, tmp, fetch)
         self.assertEqual(sorted(f.name for f in tmp.iterdir()), ["anna@x.de.jpg"])
         self.assertEqual(len(seen), 2)  # ben has a photo: never asked
+
+
+class Refresh(unittest.TestCase):
+    def test_expired_token_is_refreshed_once(self):
+        import io
+        import urllib.error
+        tokens = []
+
+        class Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def fake(req):
+            tokens.append(req.headers["Authorization"])
+            if req.headers["Authorization"] == "Bearer old":
+                raise urllib.error.HTTPError(req.full_url, 401, "x", {}, io.BytesIO(b"{}"))
+            return Resp(b'{"ok": 1}')
+        orig = ps.urllib.request.urlopen
+        ps.urllib.request.urlopen = fake
+        try:
+            self.assertEqual(ps.Api("old", refresh=lambda: "new").call("GET", "/x"), {"ok": 1})
+            self.assertEqual(tokens, ["Bearer old", "Bearer new"])
+        finally:
+            ps.urllib.request.urlopen = orig

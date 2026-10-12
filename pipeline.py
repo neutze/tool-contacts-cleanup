@@ -384,8 +384,9 @@ def main(argv=None) -> int:
     scope = " ".join([ps.SCOPE] + ([ps.GMAIL_SCOPE] if args.gmail else [])
                      + ([google_extras.OTHER_SCOPE] if args.other_contacts else []))
     token = ps.access_token(args.client_secret, scope)
-    api = ps.Api(token)
-    gmail_api = ps.Api(token, GMAIL) if args.gmail else None
+    refresh = lambda: ps.access_token(args.client_secret, scope, force_refresh=True)  # noqa: E731
+    api = ps.Api(token, refresh=refresh)
+    gmail_api = ps.Api(token, GMAIL, refresh=refresh) if args.gmail else None
     summary = run(api, gmail_api, cfg, args, args.work)
     print(("Applied. " if args.apply else "Dry run, nothing changed. ") + json.dumps(summary))
     print(f"Details: {args.work / 'sync_report.txt'}, {args.work / 'triage' / 'report.md'}")

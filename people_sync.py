@@ -150,14 +150,14 @@ def login_code(client_secret: Path, pasted: str) -> None:
     pending.unlink()
 
 
-def access_token(client_secret: Path, scope: str = SCOPE) -> str:
+def access_token(client_secret: Path, scope: str = SCOPE, force_refresh: bool = False) -> str:
     client = json.loads(client_secret.read_text())
     client = client.get("installed") or client.get("web") or client
     if TOKEN_PATH.exists():
         tok = json.loads(TOKEN_PATH.read_text())
         if not set(scope.split()) <= set(tok.get("scope", scope).split()):
             tok = {}  # this run needs a scope the saved login didn't grant: log in again
-        if tok.get("expires_at", 0) > time.time() + 60:
+        if tok.get("expires_at", 0) > time.time() + 60 and not force_refresh:
             return tok["access_token"]
         if tok.get("refresh_token"):
             try:
@@ -208,8 +208,10 @@ def access_token(client_secret: Path, scope: str = SCOPE) -> str:
 
 
 class Api:
-    def __init__(self, token: str, base: str = API):
-        self.token, self.base = token, base
+    def __init__(self, token: str, base: str = API, refresh=None):
+        """refresh: a callable returning a fresh access token; access tokens last
+        an hour, and a run with Gmail can take longer."""
+        self.token, self.base, self.refresh = token, base, refresh
 
     def call(self, method: str, path: str, body=None, params=None) -> dict:
         url = self.base + path + ("?" + urllib.parse.urlencode(params) if params else "")
@@ -223,6 +225,9 @@ class Api:
                     return json.loads(raw) if raw else {}
             except urllib.error.HTTPError as e:
                 text = e.read().decode(errors="replace")
+                if e.code == 401 and self.refresh and attempt < 5:
+                    self.token = self.refresh()
+                    continue
                 # Quotas are per minute; Gmail reports an exceeded one as 403, not 429.
                 limited = e.code in (429, 500, 502, 503) or (e.code == 403 and "uota" in text or "ateLimit" in text)
                 if limited and attempt < 5:
@@ -506,7 +511,8 @@ def main(argv=None) -> int:
         print(f"Logged in; token saved to {TOKEN_PATH}")
         return 0
     if args.photos:
-        summary = run_photos(Api(access_token(args.client_secret)), args.photos, args.apply, args.out)
+        summary = run_photos(Api(access_token(args.client_secret), refresh=lambda: access_token(args.client_secret, force_refresh=True)),
+                             args.photos, args.apply, args.out)
         print(("Applied. " if args.apply else "Dry run, nothing changed. ") + json.dumps(summary))
         print(f"Details: {args.out / 'photo_report.txt'}")
         return 0
@@ -514,7 +520,8 @@ def main(argv=None) -> int:
         ap.error("plan.json is required")
 
     plan = json.loads(args.plan.read_text(encoding="utf-8"))
-    summary = run(plan, Api(access_token(args.client_secret)), args.apply, args.out)
+    summary = run(plan, Api(access_token(args.client_secret), refresh=lambda: access_token(args.client_secret, force_refresh=True)),
+                  args.apply, args.out)
     print(("Applied. " if args.apply else "Dry run, nothing changed. ") + json.dumps(summary))
     print(f"Details: {args.out / 'sync_report.txt'}")
     if args.apply:
