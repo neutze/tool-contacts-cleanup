@@ -9,7 +9,7 @@ Python 3.9+, standard library only.
 ## Setup (once)
 
 1. Go to [console.cloud.google.com](https://console.cloud.google.com) and create a project, e.g. `contacts-sync`.
-2. Under **APIs & Services → Library**, enable **People API**, plus **Gmail API** for `--gmail`.
+2. Under **APIs & Services → Library**, enable **People API**, plus **Gmail API** for `--gmail` and **Photos Picker API** for `google_photos.py`.
 3. Under **Google Auth Platform**:
    - **Branding:** enter an app name and your email.
    - **Audience:** choose External, then add your Gmail address as a test user.
@@ -45,6 +45,7 @@ python3 pipeline.py ... --merge [--apply]      # merge the duplicate groups the 
 Other tools:
 - `add_people.py list.csv --label X`: creates or completes people from a list (class list, guest list). Data from an old list is tagged with its year, and a recorded maiden-to-married name change is applied.
 - `vcard.py contacts.vcf`: merges an iCloud, iPhone or any vCard export, filling gaps only.
+- `google_photos.py pick | assign | apply`: pictures from your Google Photos library. See [Photos from Google Photos](#photos-from-google-photos).
 
 Everything a run writes goes into `--work`:
 - `sync_report.txt`: every DELETE, UPDATE, SKIPPED and FAILED.
@@ -111,6 +112,7 @@ A `domain` rule matches that domain and its subdomains. An `org` rule is a case-
 | `contacts_cleanup.py` | Triage rules and report. |
 | `contacts_fix.py` | Fixes, labels, suggestions, `plan.json`. |
 | `live_plan.py` | Live-data passes: types, recency, names, signatures, birthdays. |
+| `google_photos.py`, `face_crop.swift` | Photos Picker session, face cut-outs (macOS Vision), the local assign page, apply. |
 | `people_sync.py` | People API client, login, matching, apply, photos, Gravatar. |
 | `merge.py` | Merging duplicate groups. |
 | `google_extras.py` | Other contacts, Address Validation. |
@@ -125,3 +127,21 @@ python3 -m unittest
 ```
 
 The tests run against a fake People API, so no account is needed.
+
+## Photos from Google Photos
+
+```bash
+python3 google_photos.py pick   --client-secret ~/.config/contacts-sync/client_secret.json
+python3 google_photos.py assign --client-secret ~/.config/contacts-sync/client_secret.json
+python3 google_photos.py apply  --client-secret ~/.config/contacts-sync/client_secret.json [--apply]
+```
+
+1. `pick` opens Google Photos. Choose any number of photos and press Done. Each one is downloaded to `work/photos/picked`, and every face in it is cut out as a square into `work/photos/crops`. A bystander in the background is left out, and a photo without a face is cut from its middle.
+2. `assign` opens a local page with every face. Type the contact's name next to it, or leave it empty to skip the face.
+3. `apply` is a dry run that writes `work/photos/photo_report.txt`. With `--apply` it sets the pictures.
+
+A card gets a picture only when it has none of its own. A Google profile picture belongs to the other person's account and does not count, so such a card still gets one. A picture you set yourself is never replaced, and no label is added.
+
+What Google allows, as of 2026-10: no API gives out the face groups or their names. Since 2025-03-31 the Photos Library API reads only what the app itself uploaded. The Photos Picker API hands over exactly the photos you choose, without names. A Takeout export does carry the names of named faces in its JSON files, but not where the face is. So you say who is who, once per face.
+
+This login is kept in its own file, `~/.config/contacts-sync/photos_token.json`, so the login for contacts and Gmail keeps its scopes. The faces are found with macOS Vision through `swift face_crop.swift`, which needs the Xcode command line tools.
