@@ -55,6 +55,22 @@ def other_contacts(api) -> list:
             return out
 
 
+BUSINESS = re.compile(r"(?i)\b(service|services|support|team|shop|store|mailbox|buchhaltung|personalverkauf|"
+                      r"anerkennung|amt|beratung|verwaltung|kundenservice|customer|info|office|gmbh|ag|ltd|inc)\b")
+RELAY_DOMAINS = ("personio.com", "personio.de", "recruitee-mailbox.com", "greenhouse-mail.io", "lever.co",
+                 "smartrecruiters.com", "workablemail.com")
+
+
+def is_person(name: str, email: str) -> bool:
+    """A named human, not a shop, an authority desk or a recruiting robot."""
+    from contacts_cleanup import real_name
+    words = name.split()
+    domain = email.lower().partition("@")[2]
+    if len(words) < 2 or BUSINESS.search(name) or any(domain == d or domain.endswith("." + d) for d in RELAY_DOMAINS):
+        return False
+    return real_name(words[0], " ".join(words[1:]))
+
+
 def worth_keeping(others: list, people: list, activity: dict, since: str, own_domains=()) -> tuple:
     """(to copy, everything else). activity: lowercased address -> last sent date."""
     known = {e["value"].strip().lower() for p in people for e in p.get("emailAddresses", [])}
@@ -64,7 +80,7 @@ def worth_keeping(others: list, people: list, activity: dict, since: str, own_do
         name = (o.get("names") or [{}])[0].get("displayName", "")
         last = max((activity.get(e, "") for e in emails), default="")
         if emails and not set(emails) & known and last >= since \
-                and all(wanted_address(e, name, tuple(own_domains)) for e in emails):
+                and all(wanted_address(e, name, tuple(own_domains)) and is_person(name, e) for e in emails):
             keep.append((o, last))
         else:
             rest.append(o)

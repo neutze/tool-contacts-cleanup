@@ -14,7 +14,8 @@ def result(complete=True, unconfirmed=False, lines=("Hauptstr. 1",), postal="803
 
 class OtherContacts(unittest.TestCase):
     def test_only_recently_mailed_and_not_already_a_contact(self):
-        others = [{"resourceName": "otherContacts/1", "emailAddresses": [{"value": "New@x.de"}]},
+        others = [{"resourceName": "otherContacts/1", "names": [{"displayName": "Nina New"}],
+                   "emailAddresses": [{"value": "New@x.de"}]},
                   {"resourceName": "otherContacts/2", "emailAddresses": [{"value": "old@x.de"}]},
                   {"resourceName": "otherContacts/3", "emailAddresses": [{"value": "anna@x.de"}]},
                   {"resourceName": "otherContacts/4", "names": [{"displayName": "no email"}]}]
@@ -23,6 +24,15 @@ class OtherContacts(unittest.TestCase):
         keep, rest = ge.worth_keeping(others, people, activity, "2023-10-12")
         self.assertEqual([o["resourceName"] for o, _ in keep], ["otherContacts/1"])
         self.assertEqual(len(rest), 3)
+
+    def test_only_named_people(self):
+        for name, email, ok in (("Raimund Kadner", "r.kadner@kadner-log.de", True),
+                                ("", "jugendamt.soz@muenchen.de", False),
+                                ("Schluesselmaier Buchhaltung", "buchhaltung@x.com", False),
+                                ("Christian Buckl", "entrix-jobs@m.personio.com", False),
+                                ("Fran Tikvic (Baufi24)", "fran@baufi24.de", False),
+                                ("Neo", "neo@me.com", False)):
+            self.assertEqual(ge.is_person(name, email), ok, name)
 
     def test_copy_is_dry_by_default(self):
         calls = []
