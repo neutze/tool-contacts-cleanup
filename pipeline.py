@@ -44,6 +44,7 @@ from pathlib import Path
 import contacts_cleanup
 import contacts_fix
 import live_plan
+import merge as merging
 import people_sync as ps
 import whatsapp_activity as wa
 
@@ -206,6 +207,12 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
     for a in activity:
         triage += ["--activity", str(a)]
     contacts_cleanup.main(triage)
+    if getattr(args, "merge", False):
+        # Merging rewrites the kept cards, so it runs on its own; the next run plans the rest.
+        groups, stale = merging.groups_from_triage(work / "triage" / "review.csv", people)
+        summary = merging.run(api, groups, args.apply, work)
+        summary["changed_since_triage"] = len(stale)
+        return summary
     contacts_fix.main([str(work / "triage" / "review.csv")] + fix_args(cfg, work, args, wa_files))
 
     plan = json.loads((work / "fix" / "plan.json").read_text(encoding="utf-8"))
@@ -252,6 +259,8 @@ def main(argv=None) -> int:
     ap.add_argument("--names", type=Path, help="filled-in work/fix/first_name_only.csv")
     ap.add_argument("--reach", type=Path, help="filled-in work/fix/reach_suggestions.csv")
     ap.add_argument("--group-labels", type=Path, help="filled-in work/fix/groups.csv")
+    ap.add_argument("--merge", action="store_true",
+                    help="merge the duplicate groups from the triage instead (report: work/merge_report.txt)")
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)

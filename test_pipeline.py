@@ -29,7 +29,7 @@ class Api(FakeApi):
 
 
 def args(**kw):
-    base = dict(apply=False, activity=None, whatsapp=None, linkedin=None, names=None, reach=None, group_labels=None)
+    base = dict(apply=False, merge=False, activity=None, whatsapp=None, linkedin=None, names=None, reach=None, group_labels=None)
     base.update(kw)
     return argparse.Namespace(**base)
 
@@ -76,6 +76,42 @@ class Pipeline(unittest.TestCase):
         import contacts_fix
         self.assertEqual([contacts_fix.row_fingerprint(r) for r in rows],
                          [ps.person_fingerprint(p) for p in self.people])
+
+
+class Merge(unittest.TestCase):
+    def test_merges_a_nickname_pair_into_the_fuller_card(self):
+        work = Path(tempfile.mkdtemp())
+        people = [
+            person("people/1", "Dennis", "Herr", emails=["d@x.de"], phones=["+49 176 1111111"],
+                   memberships=[{"contactGroupMembership": {"contactGroupResourceName": "contactGroups/myContacts"}}]),
+            person("people/2", "Dennis-Florian", "Herr", emails=["dfh@y.de"], addresses=[{"city": "Berlin"}],
+                   memberships=[{"contactGroupMembership": {"contactGroupResourceName": "contactGroups/9"}}]),
+            person("people/3", "Clara", "Lang", phones=["+49 30 1234567"]),
+            person("people/4", "Paul", "Lang", phones=["+49 30 1234567"]),  # shared landline: two people
+        ]
+        api = Api(people)
+        api.groups["contactGroups/9"] = "Friends"
+        calls = []
+        orig = api.call
+
+        def call(method, path, body=None, params=None):
+            calls.append((method, path))
+            if path.endswith(":updateContact"):
+                for f in params["updatePersonFields"].split(","):
+                    api.people[path[1:-len(":updateContact")]][f] = body[f]
+                return {}
+            return orig(method, path, body, params)
+        api.call = call
+        dry = pipeline.run(api, None, pipeline.DEFAULT_CONFIG, args(merge=True), work)
+        self.assertEqual((dry["groups"], dry["merged"]), (1, 0))
+        self.assertEqual(len(api.people), 4)
+        pipeline.run(api, None, pipeline.DEFAULT_CONFIG, args(merge=True, apply=True), work)
+        self.assertEqual(sorted(api.people), ["people/1", "people/3", "people/4"])
+        kept = api.people["people/1"]
+        self.assertEqual(kept["names"][0]["givenName"], "Dennis-Florian")
+        self.assertEqual(sorted(e["value"] for e in kept["emailAddresses"]), ["d@x.de", "dfh@y.de"])
+        self.assertEqual(kept["addresses"], [{"city": "Berlin"}])
+        self.assertIn("Friends", labels_of(api, kept))
 
 
 class Gmail(unittest.TestCase):
