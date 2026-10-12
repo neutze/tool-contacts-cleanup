@@ -1,0 +1,19 @@
+First Name,Middle Name,Last Name,Nickname,File As,Organization Name,Notes,Labels,E-mail 1 - Label,E-mail 1 - Value,E-mail 2 - Label,E-mail 2 - Value,Phone 1 - Label,Phone 1 - Value,Website 1 - Label,Website 1 - Value
+Anna,,Schmidt,,,,,* myContacts ::: Family,Home,anna.schmidt@gmail.com,,,Mobile,+49 151 2345678,,
+Anna,,Schmidt,,,,,* myContacts,Work,anna@example-corp.com,,,Mobile,0151 2345678,,
+Ben,,Okafor,,,Example Corp,,* myContacts,Work,ben.okafor@example-corp.com,Home,ben@okafor.net,Mobile,+44 7700 900123,,
+,,,,,,Imported from CRM,* myContacts ::: Imported on 3/14/21,Other,lead1@acme-leads.io,,,,,,
+,,,,,,Imported from CRM,* myContacts ::: Imported on 3/14/21,Other,lead2@acme-leads.io,,,,,,
+,,,,,,Imported from CRM,* myContacts ::: Imported on 3/14/21,Other,lead3@acme-leads.io,,,,,,
+,,,,,,,* myContacts,Other,noreply@shop.example,,,,,,
+,,,,,,,* myContacts,,,,,,,,
+Carla,,Ruiz,,,,,* myContacts ::: Friends,Home,carla.ruiz@outlook.com,,,Mobile,0049 160 9876543,,
+Carla,,Ruiz,,,,,* myContacts,,,,,Mobile,+49 160 9876543,,
+Dora,,Weiss,,,,,* myContacts,,,,,,,Home Page,http://www.google.com/profiles/123456789
+Emil,,Brandt,,,,,* myContacts,,,,,,,,
+,,Mueller,,,,,* myContacts,,,,,,,Home Page,http://www.google.com/profiles/222
+Max2000,,Power,,,,,* myContacts,,,,,,,Profile,https://plus.google.com/333
+Fritz,,,,,,,* myContacts,,,,,Mobile,0170 1112223,,
+Gina,,,,,,,* myContacts,,,,,Mobile,0170 4445556,,
+hans,,meier,,,,,* myContacts,,,,,Mobile,0170 7778889,,
+ADAC,,Pannenhilfe,,,,,* myContacts,,,,,Mobile,+49 89 222222,,

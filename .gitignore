@@ -1,0 +1,10 @@
+__pycache__/
+work/
+*_out/
+config.json
+client_secret*.json
+token.json
+*.zip
+undo.json
+Connections.csv
+whatsapp_*.csv

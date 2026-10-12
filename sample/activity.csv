@@ -1,0 +1,5 @@
+key,channel,sent,last_sent
+lead1@acme-leads.io,gmail,3,2026-05-01
+lead2@acme-leads.io,gmail,1,2015-01-01
+noreply@shop.example,gmail,0,2026-01-01
++49 151 2345678,whatsapp,40,2026-10-01

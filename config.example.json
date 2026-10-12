@@ -1,0 +1,11 @@
+{
+ "country": "49",
+ "active_years": 3,
+ "drop_email_domains": ["mytum.de", "in.tum.de"],
+ "old_email_domains": ["former-employer.com"],
+ "labels": [
+  ["domain", "tum.de", "TUM"],
+  ["org", "technische universität münchen", "TUM"],
+  ["org", "former employer", "Former Employer"]
+ ]
+}

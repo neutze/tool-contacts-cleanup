@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+"""Clean up Google Contacts end to end, straight through the People API.
+
+  python3 pipeline.py --client-secret client_secret.json                 # dry run
+  python3 pipeline.py --client-secret client_secret.json --apply         # write
+
+Each run:
+  1. reads your live contacts (no export, no Drive)
+  2. triages them: contacts_cleanup.py rules, plus activity from Gmail
+     (--gmail), WhatsApp (--whatsapp) and any --activity files
+  3. plans deletes and per-field fixes: contacts_fix.py rules, labels from
+     config.json, LinkedIn details (--linkedin Connections.csv), WhatsApp
+     profile names and group labels
+  4. adds the streamline pass: email / phone types (live_plan.py)
+  5. dry run: writes work/sync_report.txt and work/streamline_review.csv;
+     with --apply it writes the changes, after saving work/undo.json
+  6. --whatsapp also sets WhatsApp profile photos on contacts that have none
+
+Everything it writes stays in --work (default ./work). The contacts are the
+source of truth; there is no input file to keep in sync.
+
+Settings live in config.json (see config.example.json): country code, the
+activity window, email domains to drop or mark old, and labels by domain or
+company. contacts_fix.py's suggestion sheets (first_name_only.csv,
+reach_suggestions.csv, groups.csv) land in work/fix; fill one in and pass it
+back with --names / --reach / --group-labels on the next run.
+
+Setup once: README.md. Standard library only. Python 3.9+.
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import datetime as dt
+import email.utils
+import json
+import shutil
+import sys
+import tempfile
+import zipfile
+from collections import defaultdict
+from pathlib import Path
+
+import contacts_cleanup
+import contacts_fix
+import live_plan
+import people_sync as ps
+import whatsapp_activity as wa
+
+GMAIL = "https://gmail.googleapis.com/gmail/v1"
+SYSTEM_GROUPS = {"myContacts": "* myContacts", "starred": "* starred"}
+
+
+# ---- live contacts -> Google CSV rows, so the CSV rules apply unchanged ----
+
+def to_rows(people: list, group_names: dict) -> list:
+    rows = []
+    for p in people:
+        n = (p.get("names") or [{}])[0]
+        org = (p.get("organizations") or [{}])[0]
+        row = {"First Name": n.get("givenName", ""), "Middle Name": n.get("middleName", ""),
+               "Last Name": n.get("familyName", ""), "Name Prefix": n.get("honorificPrefix", ""),
+               "Name Suffix": n.get("honorificSuffix", ""),
+               "Nickname": (p.get("nicknames") or [{}])[0].get("value", ""),
+               "Organization Name": org.get("name", ""), "Organization Title": org.get("title", ""),
+               "Notes": (p.get("biographies") or [{}])[0].get("value", ""),
+               "Birthday": "x" if p.get("birthdays") else "",
+               "Labels": contacts_cleanup.MULTI.join(filter(None, (
+                   group_names.get(m.get("contactGroupMembership", {}).get("contactGroupResourceName", ""), "")
+                   for m in p.get("memberships", []))))}
+        for field, kind in (("emailAddresses", "E-mail"), ("phoneNumbers", "Phone"), ("urls", "Website")):
+            for i, x in enumerate(p.get(field, []), 1):
+                row[f"{kind} {i} - Label"] = x.get("type", "")
+                row[f"{kind} {i} - Value"] = x.get("value", "")
+        for i, a in enumerate(p.get("addresses", []), 1):
+            row[f"Address {i} - Formatted"] = a.get("formattedValue") or a.get("city", "") or "x"
+        rows.append(row)
+    return rows
+
+
+def write_rows(path: Path, rows: list) -> None:
+    header = list(dict.fromkeys(k for r in rows for k in r))
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=header)
+        w.writeheader()
+        w.writerows(rows)
+
+
+def group_names(api) -> dict:
+    groups = api.call("GET", "/contactGroups", params={"pageSize": 1000}).get("contactGroups", [])
+    return {g["resourceName"]: SYSTEM_GROUPS.get(g.get("name", ""), g.get("formattedName") or g.get("name", ""))
+            for g in groups}
+
+
+# ---- activity ---------------------------------------------------------------
+
+def gmail_activity(api, since: str) -> list:
+    """key,channel,sent,last_sent for every address you mailed since `since`,
+    from message headers only (gmail.metadata scope)."""
+    ids, token = [], None
+    after = since.replace("-", "/")
+    while True:
+        params = {"q": f"in:sent after:{after}", "maxResults": 500}
+        if token:
+            params["pageToken"] = token
+        page = api.call("GET", "/users/me/messages", params=params)
+        ids += [m["id"] for m in page.get("messages", [])]
+        token = page.get("nextPageToken")
+        if not token:
+            break
+    seen = {}
+    for mid in ids:
+        msg = api.call("GET", f"/users/me/messages/{mid}", params=[
+            ("format", "metadata"), ("metadataHeaders", "To"), ("metadataHeaders", "Cc"),
+            ("metadataHeaders", "Bcc")])
+        day = dt.datetime.fromtimestamp(int(msg.get("internalDate", 0)) / 1000, dt.timezone.utc).date().isoformat()
+        headers = [h["value"] for h in msg.get("payload", {}).get("headers", [])]
+        for _, addr in email.utils.getaddresses(headers):
+            addr = addr.strip().lower()
+            if "@" in addr:
+                sent, last = seen.get(addr, (0, ""))
+                seen[addr] = (sent + 1, max(last, day))
+    return [{"key": a, "channel": "gmail", "sent": s, "last_sent": d} for a, (s, d) in seen.items()]
+
+
+def write_activity(path: Path, rows: list, extra=()) -> None:
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["key", "channel", "sent", "last_sent", *extra], extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
+
+def whatsapp_inputs(source: Path, work: Path) -> tuple:
+    """(activity csv, groups csv, photos dir) from the Mac's WhatsApp database,
+    or from a zip made by whatsapp_activity.py --zip."""
+    out = work / "whatsapp"
+    shutil.rmtree(out, ignore_errors=True)
+    out.mkdir(parents=True)
+    if source.suffix == ".zip":
+        with zipfile.ZipFile(source) as z:
+            z.extractall(out)
+    else:
+        found, _ = wa.rows(source)
+        write_activity(out / "whatsapp_activity.csv", found, extra=["push_name"])
+        with (out / "whatsapp_groups.csv").open("w", newline="", encoding="utf-8") as f:
+            g = csv.writer(f)
+            g.writerow(["group", "key"])
+            g.writerows(wa.group_rows(source) or [])
+        (out / "photos").mkdir()
+        for number, src in wa.photo_files(source).items():
+            wa.shrink(src, out / "photos" / f"{number}.jpg")
+    return out / "whatsapp_activity.csv", out / "whatsapp_groups.csv", out / "photos"
+
+
+# ---- config -----------------------------------------------------------------
+
+DEFAULT_CONFIG = {"country": "49", "active_years": 3, "drop_email_domains": list(contacts_fix.DEFAULT_DROP_DOMAINS),
+                  "old_email_domains": [], "labels": []}
+
+
+def load_config(path) -> dict:
+    cfg = dict(DEFAULT_CONFIG)
+    if path:
+        cfg.update(json.loads(Path(path).read_text(encoding="utf-8")))
+    return cfg
+
+
+def fix_args(cfg: dict, work: Path, args, wa_files) -> list:
+    out = ["-o", str(work / "fix"), "--country", cfg["country"]]
+    for d in cfg["drop_email_domains"]:
+        out += ["--drop-email-domain", d]
+    for d in cfg["old_email_domains"]:
+        out += ["--old-email-domain", d]
+    if cfg["labels"]:
+        with (work / "label_map.csv").open("w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["kind", "pattern", "label"])
+            w.writerows(cfg["labels"])
+        out += ["--label-map", str(work / "label_map.csv")]
+    for flag, value in (("--linkedin", args.linkedin), ("--names", args.names), ("--reach", args.reach),
+                        ("--group-labels", args.group_labels)):
+        if value:
+            out += [flag, str(value)]
+    if wa_files:
+        out += ["--whatsapp", str(wa_files[0]), "--whatsapp-groups", str(wa_files[1])]
+    return out
+
+
+# ---- the run ----------------------------------------------------------------
+
+def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
+    work.mkdir(parents=True, exist_ok=True)
+    since = (dt.date.today() - dt.timedelta(days=int(cfg["active_years"] * 365))).isoformat()
+    people = ps.fetch_all(api, ps.FULL_FIELDS)
+    write_rows(work / "contacts.csv", to_rows(people, group_names(api)))
+
+    activity = list(args.activity or [])
+    if gmail_api:
+        write_activity(work / "gmail_activity.csv", gmail_activity(gmail_api, since))
+        activity.append(work / "gmail_activity.csv")
+    wa_files = whatsapp_inputs(args.whatsapp, work) if args.whatsapp else None
+    if wa_files:
+        activity.append(wa_files[0])
+
+    triage = [str(work / "contacts.csv"), "-o", str(work / "triage"), "--active-since", since]
+    for a in activity:
+        triage += ["--activity", str(a)]
+    contacts_cleanup.main(triage)
+    contacts_fix.main([str(work / "triage" / "review.csv")] + fix_args(cfg, work, args, wa_files))
+
+    plan = json.loads((work / "fix" / "plan.json").read_text(encoding="utf-8"))
+    extra = live_plan.Plan(people)
+    live_plan.streamline(extra)
+    extra.write(work / "streamline.json", work / "streamline_review.csv")
+    stream = json.loads((work / "streamline.json").read_text(encoding="utf-8"))
+    merge(plan, stream)
+    (work / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    summary = ps.run(plan, api, args.apply, work)
+    if wa_files:
+        summary["photos"] = ps.run_photos(api, wa_files[2], args.apply, work)
+    return summary
+
+
+def merge(plan: dict, extra: dict) -> None:
+    """Fold the streamline updates into the fix plan: one entry per contact,
+    fix-plan fields win where both touch the same field."""
+    by_fp = {u["fp"]: u for u in plan["updates"]}
+    deleted = {d["fp"] for d in plan["deletes"]}
+    for u in extra["updates"]:
+        if u["fp"] in deleted:
+            continue
+        if u["fp"] in by_fp:
+            by_fp[u["fp"]]["set"] = {**u["set"], **by_fp[u["fp"]]["set"]}
+        else:
+            plan["updates"].append(u)
+    for u in plan["updates"]:  # a list the fix plan rewrote still gets its types
+        live_plan.fill_types(u["set"])
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--client-secret", type=Path, required=True, help="OAuth client JSON (Desktop app)")
+    ap.add_argument("--config", type=Path, help="config.json (see config.example.json)")
+    ap.add_argument("--work", type=Path, default=Path("work"), help="where everything this run writes goes")
+    ap.add_argument("--apply", action="store_true", help="write the changes; without it nothing is changed")
+    ap.add_argument("--gmail", action="store_true", help="use your sent mail as activity (gmail.metadata scope)")
+    ap.add_argument("--whatsapp", type=Path, nargs="?", const=wa.DEFAULT_DB, metavar="DB_OR_ZIP",
+                    help="use WhatsApp: the Mac's database (default) or a zip from whatsapp_activity.py --zip")
+    ap.add_argument("--activity", type=Path, action="append", help="extra activity CSV (key,channel,sent,last_sent)")
+    ap.add_argument("--linkedin", type=Path, help="LinkedIn Connections.csv")
+    ap.add_argument("--names", type=Path, help="filled-in work/fix/first_name_only.csv")
+    ap.add_argument("--reach", type=Path, help="filled-in work/fix/reach_suggestions.csv")
+    ap.add_argument("--group-labels", type=Path, help="filled-in work/fix/groups.csv")
+    args = ap.parse_args(argv)
+
+    cfg = load_config(args.config)
+    scope = ps.SCOPE + (" " + ps.GMAIL_SCOPE if args.gmail else "")
+    token = ps.access_token(args.client_secret, scope)
+    api = ps.Api(token)
+    gmail_api = ps.Api(token, GMAIL) if args.gmail else None
+    summary = run(api, gmail_api, cfg, args, args.work)
+    print(("Applied. " if args.apply else "Dry run, nothing changed. ") + json.dumps(summary))
+    print(f"Details: {args.work / 'sync_report.txt'}, {args.work / 'triage' / 'report.md'}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
