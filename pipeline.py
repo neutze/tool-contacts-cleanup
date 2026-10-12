@@ -271,8 +271,11 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
                                                  since, own)
         summary.update(google_extras.copy_others(api, keep, args.apply, work))
         summary["other_contacts_to_clear_by_hand"] = len(rest)
-    if wa_files:
-        summary["photos"] = ps.run_photos(api, wa_files[2], args.apply, work)
+    # Photo priority: WhatsApp, then Signal (LinkedIn and Telegram exports carry none).
+    # Each pass only fills cards that still have no photo, so the earlier source wins.
+    for source, folder in (("whatsapp", wa_files[2] if wa_files else None), ("signal", work / "signal_photos")):
+        if folder and folder.is_dir():
+            summary[f"photos_{source}"] = ps.run_photos(api, folder, args.apply, work / f"photos_{source}")
     return summary
 
 
@@ -308,7 +311,7 @@ def messenger_rows(args, work: Path, wa_files) -> list:
     """WhatsApp, Signal and Telegram rows, newest profile name per number first."""
     rows = live_plan.read_csv(wa_files[0]) if wa_files else []
     if getattr(args, "signal", False):
-        rows += messengers.signal_rows()
+        rows += messengers.signal_rows(photos=work / "signal_photos")
     if getattr(args, "telegram", None):
         rows += messengers.telegram_rows(args.telegram)
     rows.sort(key=lambda r: r.get("last_sent", ""), reverse=True)

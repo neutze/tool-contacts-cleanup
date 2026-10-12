@@ -35,6 +35,26 @@ class Signal(unittest.TestCase):
         self.assertEqual(rows[1]["push_name"], "Dimi")
 
 
+class SignalAvatar(unittest.TestCase):
+    def test_plain_and_encrypted_avatars(self):
+        import base64
+        import hashlib
+        import hmac
+        base = Path(tempfile.mkdtemp())
+        (base / "attachments.noindex" / "ab").mkdir(parents=True)
+        (base / "attachments.noindex" / "ab" / "plain").write_bytes(b"\xff\xd8\xffJPEG")
+        self.assertEqual(m.signal_avatar(base, {"path": "ab/plain"}), b"\xff\xd8\xffJPEG")
+        key = bytes(range(64))
+        iv, body = b"i" * 16, b"ciphertext"
+        tag = hmac.new(key[32:], iv + body, hashlib.sha256).digest()
+        (base / "attachments.noindex" / "ab" / "enc").write_bytes(iv + body + tag)
+        runner = lambda cmd, stdin=b"": b"\xff\xd8\xffJPEG" + b"\x00" * 20  # openssl stand-in
+        meta = {"path": "ab/enc", "localKey": base64.b64encode(key).decode(), "size": 7}
+        self.assertEqual(m.signal_avatar(base, meta, runner), b"\xff\xd8\xffJPEG")
+        meta["localKey"] = base64.b64encode(bytes(64)).decode()  # wrong key: MAC fails, nothing used
+        self.assertEqual(m.signal_avatar(base, meta, runner), b"")
+
+
 class Telegram(unittest.TestCase):
     def test_export_contacts(self):
         f = Path(tempfile.mkdtemp()) / "result.json"

@@ -27,8 +27,9 @@ import tempfile
 from pathlib import Path
 
 SIGNAL_DIR = Path.home() / "Library/Application Support/Signal"
-SIGNAL_QUERY = ("SELECT e164, profileName, profileFamilyName, profileFullName, active_at "
+SIGNAL_QUERY = ("SELECT e164, profileName, profileFamilyName, profileFullName, active_at, json "
                 "FROM conversations WHERE type = 'private' AND e164 IS NOT NULL;")
+IMAGE_MAGIC = (b"\xff\xd8\xff", b"\x89PNG", b"RIFF")
 
 
 def run(cmd: list, stdin: bytes = b"") -> bytes:
@@ -48,7 +49,32 @@ def signal_key(config: dict, runner=run) -> str:
                   blob[3:]).decode().strip()
 
 
-def signal_rows(base: Path = SIGNAL_DIR, runner=run) -> list:
+def signal_avatar(base: Path, meta: dict, runner=run) -> bytes:
+    """A contact's profile picture from Signal's attachment store. Newer
+    versions encrypt it at rest: iv(16) | AES-256-CBC | HMAC-SHA256(32), with
+    the 64-byte localKey split into AES and MAC keys, and the plaintext
+    padded to a size bucket (meta['size'] is the real length)."""
+    import base64
+    import hmac
+    rel = meta.get("path") or ""
+    path = next((d / rel for d in (base / "attachments.noindex", base / "avatars.noindex", base / "profileAvatars")
+                 if rel and (d / rel).is_file()), None)
+    if not path:
+        return b""
+    blob = path.read_bytes()
+    if meta.get("localKey"):
+        key = base64.b64decode(meta["localKey"])
+        aes, mac = key[:32], key[32:]
+        iv, body, tag = blob[:16], blob[16:-32], blob[-32:]
+        if not hmac.compare_digest(hmac.new(mac, iv + body, hashlib.sha256).digest(), tag):
+            return b""
+        blob = runner(["openssl", "enc", "-d", "-aes-256-cbc", "-K", aes.hex(), "-iv", iv.hex()], body)
+        if meta.get("size"):
+            blob = blob[:int(meta["size"])]
+    return blob if blob.startswith(IMAGE_MAGIC) else b""
+
+
+def signal_rows(base: Path = SIGNAL_DIR, runner=run, photos: Path = None) -> list:
     if not shutil.which("sqlcipher") and runner is run:
         raise SystemExit("Signal needs the sqlcipher tool: brew install sqlcipher")
     key = signal_key(json.loads((base / "config.json").read_text()), runner)
@@ -67,6 +93,12 @@ def signal_rows(base: Path = SIGNAL_DIR, runner=run) -> list:
         day = dt.datetime.fromtimestamp(active / 1000, dt.timezone.utc).date().isoformat() if active else ""
         rows.append({"key": r["e164"], "channel": "signal", "sent": 1 if active else 0, "last_sent": day,
                      "push_name": name})
+        if photos:
+            meta = (json.loads(r.get("json") or "{}") or {}).get("profileAvatar") or {}
+            image = signal_avatar(base, meta, runner) if meta else b""
+            if image:
+                photos.mkdir(parents=True, exist_ok=True)
+                (photos / f"{r['e164']}.jpg").write_bytes(image)
     return rows
 
 
