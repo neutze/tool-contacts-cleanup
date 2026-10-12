@@ -1,0 +1,129 @@
+"""Two extra Google sources for the pipeline.
+
+Other contacts: the addresses Gmail collected on its own. The People API
+can list them (contacts.other.readonly) and copy one into My Contacts, but
+not delete them. Worth keeping are the ones you've written to recently and
+that aren't in My Contacts yet; the rest are cleared by hand in Google
+Contacts -> Other contacts.
+
+Addresses: Google's Address Validation API (an API key with billing) turns
+each postal address into a checked, uniformly formatted one. Only addresses
+Google confirms in full are written; the rest are listed.
+"""
+from __future__ import annotations
+
+import json
+import urllib.request
+
+import people_sync as ps
+
+OTHER_SCOPE = "https://www.googleapis.com/auth/contacts.other.readonly"
+VALIDATE = "https://addressvalidation.googleapis.com/v1:validateAddress"
+
+
+# ---- Other contacts ---------------------------------------------------------
+
+def other_contacts(api) -> list:
+    out, token = [], None
+    while True:
+        params = {"readMask": "names,emailAddresses,phoneNumbers", "pageSize": 1000}
+        if token:
+            params["pageToken"] = token
+        page = api.call("GET", "/otherContacts", params=params)
+        out += page.get("otherContacts", [])
+        token = page.get("nextPageToken")
+        if not token:
+            return out
+
+
+def worth_keeping(others: list, people: list, activity: dict, since: str) -> tuple:
+    """(to copy, everything else). activity: lowercased address -> last sent date."""
+    known = {e["value"].strip().lower() for p in people for e in p.get("emailAddresses", [])}
+    keep, rest = [], []
+    for o in others:
+        emails = [e["value"].strip().lower() for e in o.get("emailAddresses", [])]
+        last = max((activity.get(e, "") for e in emails), default="")
+        if emails and not set(emails) & known and last >= since:
+            keep.append((o, last))
+        else:
+            rest.append(o)
+    return keep, rest
+
+
+def copy_others(api, keep: list, apply: bool, out) -> dict:
+    lines = [f"COPY {(o.get('names') or [{}])[0].get('displayName', '')} <{o['emailAddresses'][0]['value']}>"
+             f" last mailed {last}" for o, last in keep]
+    if apply:
+        for o, _ in keep:
+            api.call("POST", f"/{o['resourceName']}:copyOtherContactToMyContactsGroup",
+                     body={"copyMask": "names,emailAddresses,phoneNumbers"})
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "other_contacts_report.txt").write_text(
+        f"{'APPLIED' if apply else 'DRY RUN'}: copy {len(keep)}\n\n" + "\n".join(lines) + "\n", encoding="utf-8")
+    return {"other_contacts_copied" if apply else "other_contacts_to_copy": len(keep)}
+
+
+# ---- addresses --------------------------------------------------------------
+
+def validate(address: dict, key: str, region: str = "DE", post=None) -> dict:
+    """Google's verdict and the checked address for one People API address."""
+    lines = [address[k] for k in ("streetAddress", "extendedAddress") if address.get(k)]
+    lines.append(" ".join(x for x in (address.get("postalCode", ""), address.get("city", "")) if x))
+    if not any(lines) and address.get("formattedValue"):
+        lines = address["formattedValue"].splitlines()
+    body = {"address": {"regionCode": (address.get("countryCode") or region).upper(),
+                        "addressLines": [l for l in lines if l.strip()]}}
+    if post:
+        return post(body)
+    req = urllib.request.Request(f"{VALIDATE}?key={key}", data=json.dumps(body).encode(), method="POST",
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req) as r:
+        return json.load(r)
+
+
+def checked(address: dict, result: dict) -> dict:
+    """The People API address to write, or {} when Google isn't sure."""
+    res = result.get("result", {})
+    verdict = res.get("verdict", {})
+    if not verdict.get("addressComplete") or verdict.get("hasUnconfirmedComponents") \
+            or verdict.get("hasInferredComponents") and verdict.get("validationGranularity") not in ("PREMISE", "SUB_PREMISE"):
+        return {}
+    pa = res.get("address", {}).get("postalAddress", {})
+    new = {"streetAddress": ", ".join(pa.get("addressLines", [])), "postalCode": pa.get("postalCode", ""),
+           "city": pa.get("locality", ""), "countryCode": pa.get("regionCode", "")}
+    if address.get("type"):
+        new["type"] = address["type"]
+    return {k: v for k, v in new.items() if v}
+
+
+def address_plan(people: list, key: str, region: str = "DE", post=None) -> tuple:
+    """(plan updates in people_sync format, lines for the report)."""
+    updates, lines = [], []
+    for p in people:
+        own = [a for a in p.get("addresses", [])
+               if a.get("metadata", {}).get("source", {}).get("type", "CONTACT") == "CONTACT"]
+        if not own:
+            continue
+        new_list, changed = [], False
+        for a in own:
+            if not (a.get("streetAddress") or "").strip():
+                new_list.append({k: v for k, v in a.items() if k not in ("metadata", "formattedType")})
+                continue  # a city alone can't be checked to a door
+            good = checked(a, validate(a, key, region, post))
+            old = {k: a.get(k, "") for k in ("streetAddress", "postalCode", "city", "countryCode")}
+            if good and {k: good.get(k, "") for k in old} != old:
+                new_list.append(good)
+                changed = True
+                lines.append(f"ADDRESS {(p.get('names') or [{}])[0].get('displayName', '')}: "
+                             f"{a.get('formattedValue', '').replace(chr(10), ', ')} -> "
+                             f"{good.get('streetAddress')}, {good.get('postalCode')} {good.get('city')}, "
+                             f"{good.get('countryCode')}")
+            else:
+                new_list.append({k: v for k, v in a.items() if k not in ("metadata", "formattedType")})
+                if not good:
+                    lines.append(f"UNSURE {(p.get('names') or [{}])[0].get('displayName', '')}: "
+                                 f"{a.get('formattedValue', '').replace(chr(10), ', ')}")
+        if changed:
+            updates.append({"fp": ps.person_fingerprint(p), "name": (p.get("names") or [{}])[0].get("displayName", ""),
+                            "set": {"addresses": new_list}, "add_labels": []})
+    return updates, lines

@@ -34,6 +34,7 @@ import csv
 import datetime as dt
 import email.utils
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -43,6 +44,7 @@ from pathlib import Path
 
 import contacts_cleanup
 import contacts_fix
+import google_extras
 import live_plan
 import merge as merging
 import people_sync as ps
@@ -155,7 +157,7 @@ def whatsapp_inputs(source: Path, work: Path) -> tuple:
 
 # ---- config -----------------------------------------------------------------
 
-DEFAULT_CONFIG = {"country": "49", "active_years": 3, "drop_email_domains": list(contacts_fix.DEFAULT_DROP_DOMAINS),
+DEFAULT_CONFIG = {"country": "49", "region": "DE", "active_years": 3, "drop_email_domains": list(contacts_fix.DEFAULT_DROP_DOMAINS),
                   "old_email_domains": [], "labels": []}
 
 
@@ -196,8 +198,10 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
     write_rows(work / "contacts.csv", to_rows(people, group_names(api)))
 
     activity = list(args.activity or [])
+    mailed = []
     if gmail_api:
-        write_activity(work / "gmail_activity.csv", gmail_activity(gmail_api, since))
+        mailed = gmail_activity(gmail_api, since)
+        write_activity(work / "gmail_activity.csv", mailed)
         activity.append(work / "gmail_activity.csv")
     wa_files = whatsapp_inputs(args.whatsapp, work) if args.whatsapp else None
     if wa_files:
@@ -221,9 +225,19 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
     extra.write(work / "streamline.json", work / "streamline_review.csv")
     stream = json.loads((work / "streamline.json").read_text(encoding="utf-8"))
     merge(plan, stream)
+    maps_key = getattr(args, "maps_key", None)
+    if maps_key:
+        updates, lines = google_extras.address_plan(people, maps_key, cfg.get("region", "DE"))
+        (work / "address_report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        merge(plan, {"updates": updates})
     (work / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=1), encoding="utf-8")
 
     summary = ps.run(plan, api, args.apply, work)
+    if getattr(args, "other_contacts", False):
+        keep, rest = google_extras.worth_keeping(google_extras.other_contacts(api), people,
+                                                 {r["key"]: r["last_sent"] for r in mailed}, since)
+        summary.update(google_extras.copy_others(api, keep, args.apply, work))
+        summary["other_contacts_to_clear_by_hand"] = len(rest)
     if wa_files:
         summary["photos"] = ps.run_photos(api, wa_files[2], args.apply, work)
     return summary
@@ -259,12 +273,19 @@ def main(argv=None) -> int:
     ap.add_argument("--names", type=Path, help="filled-in work/fix/first_name_only.csv")
     ap.add_argument("--reach", type=Path, help="filled-in work/fix/reach_suggestions.csv")
     ap.add_argument("--group-labels", type=Path, help="filled-in work/fix/groups.csv")
+    ap.add_argument("--other-contacts", action="store_true",
+                    help="copy Other contacts you've mailed recently into My Contacts (needs --gmail)")
+    ap.add_argument("--maps-key", default=os.environ.get("MAPS_API_KEY"),
+                    help="Address Validation API key (or MAPS_API_KEY): check and format addresses")
     ap.add_argument("--merge", action="store_true",
                     help="merge the duplicate groups from the triage instead (report: work/merge_report.txt)")
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)
-    scope = ps.SCOPE + (" " + ps.GMAIL_SCOPE if args.gmail else "")
+    if args.other_contacts and not args.gmail:
+        ap.error("--other-contacts needs --gmail: only recently mailed ones are worth keeping")
+    scope = " ".join([ps.SCOPE] + ([ps.GMAIL_SCOPE] if args.gmail else [])
+                     + ([google_extras.OTHER_SCOPE] if args.other_contacts else []))
     token = ps.access_token(args.client_secret, scope)
     api = ps.Api(token)
     gmail_api = ps.Api(token, GMAIL) if args.gmail else None
