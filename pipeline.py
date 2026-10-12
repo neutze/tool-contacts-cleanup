@@ -270,7 +270,7 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
     summary["incomplete"] = write_incomplete(work / "incomplete.csv", people, plan)
     if getattr(args, "other_contacts", False):
         keep, rest = google_extras.worth_keeping(others, people, {r["key"]: r["last_sent"] for r in mailed},
-                                                 since, own)
+                                                 since, own, cfg.get("own_names", []))
         summary.update(google_extras.copy_others(api, keep, args.apply, work))
         summary["other_contacts_to_clear_by_hand"] = len(rest)
     # Photo priority: WhatsApp, then Signal (LinkedIn and Telegram exports carry none).

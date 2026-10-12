@@ -19,7 +19,7 @@ import urllib.request
 import people_sync as ps
 from contacts_cleanup import is_noreply
 
-ROLE = re.compile(r"^(info|service|kundenservice|kunde|kunden|support|hello|hallo|contact|kontakt|office|mail|team|"
+ROLE = re.compile(r"^(info|service|hotline|payroll|recruiting|recruiter|hr|praxis|kundenbetreuung|kundenservice|kunde|kunden|support|hello|hallo|contact|kontakt|office|mail|team|"
                   r"people|jobs|career|karriere|bewerbung|anfrage|anfragen|booking|buchung|reservierung|rechnung|"
                   r"billing|sales|vertrieb|order|orders|shop|reiseportal|post|empfang|rezeption|praxis|verwaltung|"
                   r"standesamt|buergeramt|presse|newsletter|admin|webmaster)([._-].*)?$", re.I)
@@ -61,27 +61,41 @@ RELAY_DOMAINS = ("personio.com", "personio.de", "recruitee-mailbox.com", "greenh
                  "smartrecruiters.com", "workablemail.com")
 
 
-def is_person(name: str, email: str) -> bool:
-    """A named human, not a shop, an authority desk or a recruiting robot."""
+def is_person(name: str, email: str, own_names=()) -> bool:
+    """A named human, not you, a shop, an authority desk, a shared mailbox
+    with a person's name in front (payroll@, people@) or a recruiting robot."""
     from contacts_cleanup import real_name
     words = name.split()
-    domain = email.lower().partition("@")[2]
-    if len(words) < 2 or BUSINESS.search(name) or any(domain == d or domain.endswith("." + d) for d in RELAY_DOMAINS):
+    local, _, domain = email.lower().partition("@")
+    if len(words) < 2 or BUSINESS.search(name) or ROLE.match(local) \
+            or any(domain == d or domain.endswith("." + d) for d in RELAY_DOMAINS) \
+            or ps.fold(name) in {ps.fold(n) for n in own_names}:
         return False
     return real_name(words[0], " ".join(words[1:]))
 
 
-def worth_keeping(others: list, people: list, activity: dict, since: str, own_domains=()) -> tuple:
-    """(to copy, everything else). activity: lowercased address -> last sent date."""
+def worth_keeping(others: list, people: list, activity: dict, since: str, own_domains=(), own_names=()) -> tuple:
+    """(to copy, everything else). activity: lowercased address -> last sent date.
+    One copy per address and per name: a second address of the same person
+    joins the first copy."""
     known = {e["value"].strip().lower() for p in people for e in p.get("emailAddresses", [])}
-    keep, rest = [], []
+    keep, rest, taken, by_name = [], [], set(), {}
     for o in others:
         emails = [e["value"].strip().lower() for e in o.get("emailAddresses", [])]
         name = (o.get("names") or [{}])[0].get("displayName", "")
         last = max((activity.get(e, "") for e in emails), default="")
         if emails and not set(emails) & known and last >= since \
-                and all(wanted_address(e, name, tuple(own_domains)) and is_person(name, e) for e in emails):
-            keep.append((o, last))
+                and all(wanted_address(e, name, tuple(own_domains)) and is_person(name, e, own_names) for e in emails):
+            new = [e for e in o["emailAddresses"] if e["value"].strip().lower() not in taken]
+            taken |= set(emails)
+            if not new:
+                rest.append(o)
+            elif ps.fold(name) in by_name:
+                by_name[ps.fold(name)]["emailAddresses"] += new
+            else:
+                o = dict(o, emailAddresses=new)
+                by_name[ps.fold(name)] = o
+                keep.append((o, last))
         else:
             rest.append(o)
     return keep, rest
@@ -146,12 +160,22 @@ def attach_to_existing(people: list, others: list, own_domains=()) -> list:
 
 
 def copy_others(api, keep: list, apply: bool, out) -> dict:
+    """Copies each kept Other contact; extra addresses of the same person
+    are added to the new card."""
     lines = [f"COPY {(o.get('names') or [{}])[0].get('displayName', '')} <{o['emailAddresses'][0]['value']}>"
              f" last mailed {last}" for o, last in keep]
     if apply:
         for o, _ in keep:
-            api.call("POST", f"/{o['resourceName']}:copyOtherContactToMyContactsGroup",
-                     body={"copyMask": "names,emailAddresses,phoneNumbers"})
+            made = api.call("POST", f"/{o['resourceName']}:copyOtherContactToMyContactsGroup",
+                            body={"copyMask": "names,emailAddresses,phoneNumbers"}) or {}
+            if len(o["emailAddresses"]) > 1 and made.get("resourceName"):
+                fresh = api.call("GET", f"/{made['resourceName']}", params={"personFields": "emailAddresses"})
+                have = {e["value"].lower() for e in fresh.get("emailAddresses", [])}
+                extra = [{"value": e["value"]} for e in o["emailAddresses"] if e["value"].lower() not in have]
+                if extra:
+                    api.call("PATCH", f"/{made['resourceName']}:updateContact",
+                             params={"updatePersonFields": "emailAddresses"},
+                             body={"etag": fresh["etag"], "emailAddresses": fresh.get("emailAddresses", []) + extra})
     out.mkdir(parents=True, exist_ok=True)
     (out / "other_contacts_report.txt").write_text(
         f"{'APPLIED' if apply else 'DRY RUN'}: copy {len(keep)}\n\n" + "\n".join(lines) + "\n", encoding="utf-8")

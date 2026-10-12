@@ -34,6 +34,24 @@ class OtherContacts(unittest.TestCase):
                                 ("Neo", "neo@me.com", False)):
             self.assertEqual(ge.is_person(name, email), ok, name)
 
+    def test_no_self_no_role_box_one_copy_per_person(self):
+        others = [{"resourceName": "otherContacts/1", "names": [{"displayName": "Raimund Kadner"}],
+                   "emailAddresses": [{"value": "r@k.de"}]},
+                  {"resourceName": "otherContacts/2", "names": [{"displayName": "Raimund Kadner"}],
+                   "emailAddresses": [{"value": "r@k.de"}]},
+                  {"resourceName": "otherContacts/3", "names": [{"displayName": "David Perez"}],
+                   "emailAddresses": [{"value": "d@c.com"}]},
+                  {"resourceName": "otherContacts/4", "names": [{"displayName": "David Perez"}],
+                   "emailAddresses": [{"value": "d@c.de"}]},
+                  {"resourceName": "otherContacts/5", "names": [{"displayName": "Hagar Itzhaki"}],
+                   "emailAddresses": [{"value": "payroll@wolt.com"}]},
+                  {"resourceName": "otherContacts/6", "names": [{"displayName": "Johannes Neutze"}],
+                   "emailAddresses": [{"value": "johannes@x.com"}]}]
+        activity = {e: "2026-01-01" for e in ("r@k.de", "d@c.com", "d@c.de", "payroll@wolt.com", "johannes@x.com")}
+        keep, _ = ge.worth_keeping(others, [], activity, "2023-01-01", own_names=["Johannes Neutze"])
+        got = {o["names"][0]["displayName"]: [e["value"] for e in o["emailAddresses"]] for o, _ in keep}
+        self.assertEqual(got, {"Raimund Kadner": ["r@k.de"], "David Perez": ["d@c.com", "d@c.de"]})
+
     def test_copy_is_dry_by_default(self):
         calls = []
 

@@ -88,13 +88,13 @@ Google Contacts → Settings → **Undo changes** covers 30 days. A second run r
 ```json
 {
   "country": "49", "region": "DE", "active_years": 3,
-  "delete_unreachable": true, "own_domains": ["example.com"],
+  "delete_unreachable": true, "own_domains": ["example.com"], "own_names": ["Your Name"],
   "drop_email_domains": ["mytum.de"], "old_email_domains": ["former-employer.com"],
   "labels": [["domain", "tum.de", "TUM"], ["org", "former employer", "Former Employer"]]
 }
 ```
 
-A `domain` rule matches that domain and its subdomains. An `org` rule is a case-insensitive match anywhere in the company name. `own_domains` are your own aliases, which are never copied as contacts.
+A `domain` rule matches that domain and its subdomains. An `org` rule is a case-insensitive match anywhere in the company name. `own_domains` and `own_names` are you: your aliases and your name are never copied as contacts.
 
 ## How it stays safe
 
