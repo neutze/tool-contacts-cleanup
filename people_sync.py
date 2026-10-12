@@ -442,6 +442,51 @@ def run_photos(api, photos: Path, apply: bool, out: Path) -> dict:
     return summary
 
 
+def gravatar(people: list, out: Path, fetch=None) -> Path:
+    """Public Gravatar pictures (by SHA-256 of the address) for contacts with an
+    email and no photo, saved as <email>.jpg for run_photos_by_email."""
+    out.mkdir(parents=True, exist_ok=True)
+
+    def default_fetch(url):
+        try:
+            with urllib.request.urlopen(url, timeout=10) as r:
+                return r.read()
+        except urllib.error.HTTPError:
+            return b""
+    fetch = fetch or default_fetch
+    for p in people:
+        if any(not ph.get("default") for ph in p.get("photos", [])):
+            continue
+        for e in p.get("emailAddresses", []):
+            addr = e["value"].strip().lower()
+            image = fetch(f"https://gravatar.com/avatar/{hashlib.sha256(addr.encode()).hexdigest()}?d=404&s=512")
+            if image:
+                (out / f"{addr}.jpg").write_bytes(image)
+                break
+    return out
+
+
+def run_photos_by_email(api, photos: Path, apply: bool, out: Path) -> dict:
+    """Like run_photos, keyed by email address instead of number."""
+    out.mkdir(parents=True, exist_ok=True)
+    files = {f.stem.lower(): f for f in photos.glob("*.jpg")}
+    people = fetch_all(api, "names,emailAddresses,photos")
+    lines, done = [], 0
+    for p in people:
+        if any(not ph.get("default") for ph in p.get("photos", [])):
+            continue
+        f = next((files[e["value"].strip().lower()] for e in p.get("emailAddresses", [])
+                  if e["value"].strip().lower() in files), None)
+        if f:
+            lines.append(f"PHOTO {(p.get('names') or [{}])[0].get('displayName', '')} <- {f.name}")
+            if apply:
+                api.call("PATCH", f"/{p['resourceName']}:updateContactPhoto",
+                         body={"photoBytes": base64.b64encode(f.read_bytes()).decode()})
+            done += 1
+    (out / "photo_report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return {"photo": done}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("plan", type=Path, nargs="?", help="plan.json from contacts_fix.py")

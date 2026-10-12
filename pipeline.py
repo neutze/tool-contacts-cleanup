@@ -278,6 +278,9 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
     for source, folder in (("whatsapp", wa_files[2] if wa_files else None), ("signal", work / "signal_photos")):
         if folder and folder.is_dir():
             summary[f"photos_{source}"] = ps.run_photos(api, folder, args.apply, work / f"photos_{source}")
+    if getattr(args, "gravatar", False):  # last: only cards no messenger gave a photo
+        folder = ps.gravatar(ps.fetch_all(api, "emailAddresses,photos"), work / "gravatar")
+        summary["photos_gravatar"] = ps.run_photos_by_email(api, folder, args.apply, work / "photos_gravatar")
     return summary
 
 
@@ -360,6 +363,7 @@ def main(argv=None) -> int:
                     help="use WhatsApp: the Mac's database (default) or a zip from whatsapp_activity.py --zip")
     ap.add_argument("--activity", type=Path, action="append", help="extra activity CSV (key,channel,sent,last_sent)")
     ap.add_argument("--linkedin", type=Path, help="LinkedIn Connections.csv")
+    ap.add_argument("--gravatar", action="store_true", help="public Gravatar photos for cards still without one")
     ap.add_argument("--signal", action="store_true", help="use Signal Desktop's profile names and activity (macOS)")
     ap.add_argument("--telegram", type=Path, metavar="RESULT_JSON",
                     help="Telegram Desktop export (Contacts list, JSON)")

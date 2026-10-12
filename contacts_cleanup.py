@@ -49,6 +49,8 @@ NOREPLY = re.compile(
     re.I,
 )
 NOREPLY_DOMAIN = re.compile(r"^(no-?reply|reply|bounces?|notifications?|mailer)\.", re.I)
+# Digits glued into a word ("W33d", "Airbnb2") or emoji: a handle, not a name.
+ODD_NAME = re.compile(r"[A-Za-zÀ-ÿ]\d|\d[A-Za-zÀ-ÿ]|[\U0001F000-\U0001FAFF\u2600-\u27BF]")
 IMPORT_LABEL = re.compile(r"import", re.I)
 SYSTEM_LABELS = {"mycontacts", "my contacts", "starred", "friends", "family", "coworkers"}
 FREEMAIL = {
@@ -59,7 +61,7 @@ FREEMAIL = {
 # One name part: letter-words joined by space, hyphen, apostrophe or dot,
 # optionally followed by a parenthetical such as a maiden name.
 NAME_PART = re.compile(r"^[^\W\d_]+(?:[-'’. ]+[^\W\d_]+)*\.?(?:\s*\([^\W\d_][^()\d]*\))?$")
-FLAGS = ("empty", "unreachable", "noreply", "dead_profile", "brand_page", "email_only", "no_contact", "real_name", "no_name", "no_phone",
+FLAGS = ("empty", "unreachable", "odd_name", "noreply", "dead_profile", "brand_page", "email_only", "no_contact", "real_name", "no_name", "no_phone",
          "no_email", "import_label", "active", "stale")
 
 
@@ -92,7 +94,7 @@ class Contact:
     def base_action(self) -> str:
         """The action without the activity signal, so the report can show what activity rescued."""
         f = set(self.flags)
-        if {"empty", "unreachable", "noreply", "stale", "brand_page"} & f or ("dead_profile" in f and "real_name" not in f):
+        if {"empty", "unreachable", "noreply", "stale", "brand_page", "odd_name"} & f or ("dead_profile" in f and "real_name" not in f):
             return "delete-candidate"
         if self.dup_group:
             return "merge-review"
@@ -179,6 +181,8 @@ def flag(c: Contact) -> None:
         f.append("noreply")
     if not c.emails and not c.phones and c.websites and all(DEAD_PROFILE.match(w) for w in c.websites):
         f.append("dead_profile")
+    if c.name and (ODD_NAME.search(c.name) or len(re.sub(r"\W", "", c.name)) <= 2):
+        f.append("odd_name")
     if "dead_profile" in f and BRAND_WORDS.search(c.name):
         f.append("brand_page")
     if not c.name and not c.phones and c.emails:

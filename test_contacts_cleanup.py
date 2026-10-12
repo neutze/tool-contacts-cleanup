@@ -98,6 +98,15 @@ class RealName(unittest.TestCase):
             self.assertFalse(cc.real_name(first, last), (first, last))
 
 
+class OddNames(unittest.TestCase):
+    def test_handles_are_delete_candidates_real_names_are_not(self):
+        for name, odd in (("Ali W33d", True), ("Airbnb2", True), ("Rg", True), ("Anna 🌴", True),
+                          ("Anna Schmidt", False), ("Zoë Ünal", False), ("Taxi", False)):
+            c = cc.parse({"First Name": name, "Phone 1 - Value": "+491511111111"}, 2, "t")
+            cc.flag(c)
+            self.assertEqual("odd_name" in c.flags, odd, name)
+
+
 class Duplicates(unittest.TestCase):
     def groups(self, *rows):
         contacts = [cc.parse(r, i + 2, "t") for i, r in enumerate(rows)]

@@ -241,3 +241,18 @@ class Retry(unittest.TestCase):
             self.assertEqual(len(calls), 2)
         finally:
             ps.urllib.request.urlopen, ps.time.sleep = orig_open, orig_sleep
+
+
+class Gravatar(unittest.TestCase):
+    def test_only_cards_without_photo_and_known_pictures(self):
+        import hashlib
+        tmp = Path(tempfile.mkdtemp())
+        known = hashlib.sha256(b"anna@x.de").hexdigest()
+        people = [{"emailAddresses": [{"value": "Anna@x.de"}]},
+                  {"emailAddresses": [{"value": "ben@x.de"}], "photos": [{"url": "u"}]},
+                  {"emailAddresses": [{"value": "nobody@x.de"}]}]
+        seen = []
+        fetch = lambda url: seen.append(url) or (b"\xff\xd8\xff" if known in url else b"")
+        ps.gravatar(people, tmp, fetch)
+        self.assertEqual(sorted(f.name for f in tmp.iterdir()), ["anna@x.de.jpg"])
+        self.assertEqual(len(seen), 2)  # ben has a photo: never asked
