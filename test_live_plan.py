@@ -46,6 +46,7 @@ class Truth(unittest.TestCase):
     def test_new_last_name_rules(self):
         self.assertEqual(lp.new_last_name("Anna Müller", "Anna", "Schmidt"), "Müller")
         self.assertEqual(lp.new_last_name("Anna Schmidt", "Anna", "Schmidt"), "")
+        self.assertEqual(lp.new_last_name("Ayse Mekikci", "Ayse", "Mekikci Aksoy"), "")  # shortened double name
         for nick in ("Anna", "Anna 🌴", "Anna2 Schmidt", "Annie Schmidt", "Anna S", "Mama"):
             self.assertEqual(lp.new_last_name(nick, "Anna", "Schmidt"), "", nick)
 

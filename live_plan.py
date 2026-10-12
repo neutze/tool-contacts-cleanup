@@ -229,6 +229,8 @@ def new_last_name(full: str, given: str, family: str) -> str:
     last = " ".join(words[1:])
     if not real_name(words[0], last) or fold(last) == fold(family):
         return ""
+    if family and set(fold(last).split()) < set(fold(family).split()):
+        return ""  # "Mekikci" for "Mekikci Aksoy": a shortened double name, not a new one
     return last
 
 

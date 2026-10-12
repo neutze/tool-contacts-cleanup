@@ -146,6 +146,17 @@ class Activity(unittest.TestCase):
             self.assertIn("stale", self.rows[r - 2]["cleanup_flags"])
         self.assertNotIn("active", self.rows[4]["cleanup_flags"])
 
+    def test_messenger_activity_alone_makes_nothing_stale(self):
+        c = cc.Contact(0, "t", {}, emails=["info@cafe.de"])
+        cc.flag(c)
+        cc.apply_activity([c], {"491701234567": ("2026-05-01", {"whatsapp"})}, "2023-01-01")
+        self.assertNotIn("stale", c.flags)
+
+    def test_a_business_is_not_email_only(self):
+        c = cc.Contact(0, "t", {}, emails=["info@cafe.de"], org="Café Härtl")
+        cc.flag(c)
+        self.assertNotIn("email_only", c.flags)
+
     def test_zero_sent_does_not_count(self):
         self.assertEqual(self.action(8), "delete-candidate")
 

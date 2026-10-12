@@ -185,7 +185,7 @@ def flag(c: Contact) -> None:
         f.append("odd_name")
     if "dead_profile" in f and BRAND_WORDS.search(c.name):
         f.append("brand_page")
-    if not c.name and not c.phones and c.emails:
+    if not c.name and not c.org and not c.phones and c.emails:
         f.append("email_only")
     if c.name and not c.emails and not c.phones and "dead_profile" not in f:
         f.append("no_contact")
@@ -228,6 +228,8 @@ def mark_unreachable(contacts: list) -> None:
 
 
 def apply_activity(contacts: list, activity: dict, since: str) -> None:
+    # Only sent mail can tell an email-only card is stale; messenger activity alone says nothing about it.
+    has_mail = any("@" in key for key in activity)
     for c in contacts:
         for key in [e.lower() for e in c.emails] + [phone_key(p) for p in c.phones]:
             if key in activity:
@@ -236,7 +238,7 @@ def apply_activity(contacts: list, activity: dict, since: str) -> None:
                 c.channels |= channels
         if c.last_sent and c.last_sent >= since:
             c.flags.append("active")
-        elif "email_only" in c.flags:
+        elif "email_only" in c.flags and has_mail:
             # Gmail used to save everyone you emailed; no recent mail means nobody you still write to.
             c.flags.append("stale")
 
