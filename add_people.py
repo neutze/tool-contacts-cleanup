@@ -151,10 +151,15 @@ def plan(rows: list, people: list, country: str = "49") -> tuple:
 
 
 def run(api, rows: list, label: str, apply: bool, out: Path, country: str = "49") -> dict:
-    people = ps.fetch_all(api)
+    people = ps.fetch_all(api, ps.FULL_FIELDS)  # addresses too, or every card looks address-less
     creates, updates, lines = plan(rows, people, country)
+    group = ps.ensure_groups(api, {label}, False)[label]
+    members = {p_["resourceName"] for p_ in people for m in p_.get("memberships", [])
+               if m.get("contactGroupMembership", {}).get("contactGroupResourceName") == group}
+    by_fp = {ps.person_fingerprint(p_): p_["resourceName"] for p_ in people}
     for u in updates:
-        u["add_labels"] = [label]
+        u["add_labels"] = [] if by_fp.get(u["fp"]) in members else [label]
+    updates = [u for u in updates if u["set"] or u["add_labels"]]
     out.mkdir(parents=True, exist_ok=True)
     summary = ps.run({"export_counts": {}, "deletes": [], "updates": updates}, api, apply, out)
     if apply:

@@ -68,3 +68,13 @@ class Siblings(unittest.TestCase):
         self.assertIsNone(ap.match(row, people))
         row["given"] = "Julia"
         self.assertIs(ap.match(row, people), people[0])
+
+
+class KeepsNewerAddress(unittest.TestCase):
+    def test_list_address_never_replaces_one_on_the_card(self):
+        people = [{"resourceName": "people/1", "names": [{"givenName": "Stephan", "familyName": "Weber"}],
+                   "addresses": [{"streetAddress": "Heidelberger Str. 31", "city": "Berlin"}]}]
+        rows = [{"given": "Stephan", "family": "Weber", "maiden": "", "email": "", "phone": "0170 1234567",
+                 "street": "Birkenstr. 4", "city": "85452 Eichenried"}]
+        _, updates, _ = ap.plan(rows, people)
+        self.assertNotIn("addresses", updates[0]["set"])
