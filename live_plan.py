@@ -207,16 +207,95 @@ def names_from_whatsapp(plan: Plan, rows: list) -> None:
     by_phone = {phone_key(r["key"]): r.get("push_name", "").strip() for r in rows if r.get("push_name", "").strip()}
     for rn, p in plan.people.items():
         n = (p.get("names") or [{}])[0]
-        if not n.get("givenName") or not n.get("familyName"):
+        if not n.get("givenName") or " " in n["givenName"].strip():
             continue
         for x in p.get("phoneNumbers", []):
-            words = by_phone.get(phone_key(x["value"]), "").split()
-            if len(words) >= 2 and fold(words[0]) == fold(n["givenName"]) \
-                    and real_name(words[0], " ".join(words[1:])) and fold(" ".join(words[1:])) != fold(n["familyName"]):
+            last = new_last_name(by_phone.get(phone_key(x["value"]), ""), n["givenName"], n.get("familyName", ""))
+            if last:
                 plan.change(rn, "names", {"givenName": n["givenName"], "middleName": n.get("middleName", ""),
-                                          "familyName": " ".join(words[1:])}, "whatsapp profile name",
-                            f"{n['familyName']} -> {' '.join(words[1:])}")
+                                          "familyName": last}, "whatsapp profile name",
+                            f"{n.get('familyName') or '(none)'} -> {last}")
                 break
+
+
+def new_last_name(full: str, given: str, family: str) -> str:
+    """The last name from a proper full name that starts with the card's first
+    name, when it differs from the card's (or the card has none). A nickname,
+    a single word, emoji or digits give nothing."""
+    from contacts_cleanup import real_name
+    words = full.split()
+    if len(words) < 2 or fold(words[0]) != fold(given):
+        return ""
+    last = " ".join(words[1:])
+    if not real_name(words[0], last) or fold(last) == fold(family):
+        return ""
+    return last
+
+
+def clean_name(text: str) -> str:
+    """Letters, spaces, hyphens and apostrophes only: 'Dimi 🌴' -> 'Dimi'."""
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s'’-]|[\d_]", " ", text)).strip()
+
+
+def complete_names(plan: Plan, push_rows: list = ()) -> None:
+    """Everyone gets a first and a last name. Run after the proper sources
+    (WhatsApp, LinkedIn) have had their say. A missing part comes from, in
+    order: the card's nickname, the WhatsApp profile name, the company."""
+    by_phone = {phone_key(r["key"]): clean_name(r.get("push_name", "")) for r in push_rows
+                if clean_name(r.get("push_name", ""))}
+    for rn, p in plan.people.items():
+        n = dict((p.get("names") or [{}])[0])
+        n.update(plan.sets.get(rn, {}).get("names", {}))
+        given, family = (n.get("givenName") or "").strip(), (n.get("familyName") or "").strip()
+        if given and family or not (given or family):
+            continue
+        pushes = [by_phone.get(phone_key(x["value"]), "") for x in p.get("phoneNumbers", [])]
+        hints = [clean_name(x.get("value", "")) for x in p.get("nicknames", [])] + [x for x in pushes if x] \
+            + [clean_name(o.get("name", "")) for o in p.get("organizations", [])]
+        have = fold(given or family)
+        fill = ""
+        for h in hints:
+            words = [w for w in h.split() if fold(w) != have]
+            if words:
+                fill = " ".join(words)
+                break
+        if not fill:
+            continue
+        new = {"givenName": given or fill, "middleName": n.get("middleName", ""), "familyName": family or fill}
+        plan.change(rn, "names", new, "complete names", f"{given or '?'} {family or '?'} -> "
+                    f"{new['givenName']} {new['familyName']}")
+
+
+def from_linkedin(plan: Plan, rows: list) -> None:
+    """LinkedIn is kept up to date by the person: current company and title
+    replace the card's; a new last name is taken when the match is sure (same
+    email, same first name). Name matches without an email only fill gaps."""
+    by_email, by_name = {}, defaultdict(list)
+    for r in rows:
+        if r.get("Email Address", "").strip():
+            by_email[r["Email Address"].strip().lower()] = r
+        by_name[fold(f"{r.get('First Name', '')} {r.get('Last Name', '')}")].append(r)
+    for rn, p in plan.people.items():
+        n = (p.get("names") or [{}])[0]
+        r = next((by_email[e["value"].strip().lower()] for e in p.get("emailAddresses", [])
+                  if e["value"].strip().lower() in by_email), None)
+        sure = r is not None
+        if not r:
+            found = by_name.get(fold(f"{n.get('givenName', '')} {n.get('familyName', '')}"), [])
+            r = found[0] if len(found) == 1 else None
+        if not r:
+            continue
+        org = (p.get("organizations") or [{}])[0]
+        new = {"name": r.get("Company", "").strip(), "title": r.get("Position", "").strip()}
+        if any(new.values()) and (new["name"], new["title"]) != (org.get("name", ""), org.get("title", "")):
+            plan.change(rn, "organizations", {k: v or org.get(k, "") for k, v in new.items()}, "linkedin",
+                        f"{new['title']} @ {new['name']}".strip(" @"))
+        if sure:
+            last = new_last_name(f"{r.get('First Name', '')} {r.get('Last Name', '')}".strip(),
+                                 n.get("givenName", ""), n.get("familyName", ""))
+            if last:
+                plan.change(rn, "names", {"givenName": n["givenName"], "middleName": n.get("middleName", ""),
+                                          "familyName": last}, "linkedin", f"{n.get('familyName')} -> {last}")
 
 
 def main(argv=None) -> int:

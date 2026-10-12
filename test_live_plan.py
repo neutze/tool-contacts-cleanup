@@ -36,5 +36,51 @@ class Names(unittest.TestCase):
         self.assertEqual(dict(pl.sets), {})
 
 
+class Truth(unittest.TestCase):
+    def test_first_name_only_gets_last_name_from_proper_whatsapp_name(self):
+        pl = plan({"names": [{"givenName": "Abdellah", "displayName": "Abdellah"}],
+                   "phoneNumbers": [{"value": "+49 1514 0400135"}]})
+        lp.names_from_whatsapp(pl, [{"key": "+4915140400135", "push_name": "Abdellah Benali"}])
+        self.assertEqual(pl.sets["people/0"]["names"]["familyName"], "Benali")
+
+    def test_new_last_name_rules(self):
+        self.assertEqual(lp.new_last_name("Anna Müller", "Anna", "Schmidt"), "Müller")
+        self.assertEqual(lp.new_last_name("Anna Schmidt", "Anna", "Schmidt"), "")
+        for nick in ("Anna", "Anna 🌴", "Anna2 Schmidt", "Annie Schmidt", "Anna S", "Mama"):
+            self.assertEqual(lp.new_last_name(nick, "Anna", "Schmidt"), "", nick)
+
+    def test_linkedin_job_wins_and_last_name_only_on_email_match(self):
+        pl = plan({"names": [{"givenName": "Anna", "familyName": "Schmidt"}],
+                   "emailAddresses": [{"value": "anna@x.de"}], "organizations": [{"name": "Old GmbH"}]},
+                  {"names": [{"givenName": "Ben", "familyName": "Okafor"}]})
+        rows = [{"First Name": "Anna", "Last Name": "Müller", "Email Address": "Anna@x.de", "Company": "New AG",
+                 "Position": "CTO"},
+                {"First Name": "Ben", "Last Name": "Okafor", "Email Address": "", "Company": "Acme", "Position": ""}]
+        lp.from_linkedin(pl, rows)
+        self.assertEqual(pl.sets["people/0"]["organizations"], {"name": "New AG", "title": "CTO"})
+        self.assertEqual(pl.sets["people/0"]["names"]["familyName"], "Müller")
+        self.assertEqual(pl.sets["people/1"]["organizations"]["name"], "Acme")
+        self.assertNotIn("names", pl.sets["people/1"])
+
+
+class CompleteNames(unittest.TestCase):
+    def test_gaps_filled_from_nickname_then_whatsapp_then_company(self):
+        pl = plan({"names": [{"givenName": "Dario"}], "nicknames": [{"value": "Mr. D"}]},
+                  {"names": [{"givenName": "Pero"}], "phoneNumbers": [{"value": "+491769852"}]},
+                  {"names": [{"givenName": "Taxi"}], "organizations": [{"name": "Isar Funk"}]},
+                  {"names": [{"familyName": "Herr"}], "nicknames": [{"value": "Dennis"}]},
+                  {"names": [{"givenName": "Solo"}]})
+        lp.complete_names(pl, [{"key": "+491769852", "push_name": "Pero 🎸 Kovac"}])
+        got = {rn: (s["names"]["givenName"], s["names"]["familyName"]) for rn, s in pl.sets.items()}
+        self.assertEqual(got, {"people/0": ("Dario", "Mr D"), "people/1": ("Pero", "Kovac"),
+                               "people/2": ("Taxi", "Isar Funk"), "people/3": ("Dennis", "Herr")})
+
+    def test_proper_name_from_an_earlier_source_is_kept(self):
+        pl = plan({"names": [{"givenName": "Abdellah"}], "nicknames": [{"value": "Abdi"}]})
+        pl.sets["people/0"]["names"] = {"givenName": "Abdellah", "middleName": "", "familyName": "Benali"}
+        lp.complete_names(pl)
+        self.assertEqual(pl.sets["people/0"]["names"]["familyName"], "Benali")
+
+
 if __name__ == "__main__":
     unittest.main()

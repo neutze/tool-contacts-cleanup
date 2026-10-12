@@ -246,10 +246,14 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
         wa_rows = live_plan.read_csv(wa_files[0])
         seen.update({ps.phone_key(r["key"]): r["last_sent"] for r in wa_rows if r.get("last_sent")})
         live_plan.names_from_whatsapp(extra, wa_rows)
+    if args.linkedin:
+        _, li_rows = contacts_fix.read_csv(args.linkedin)
+        live_plan.from_linkedin(extra, li_rows)
+    live_plan.complete_names(extra, wa_rows if wa_files else [])
     live_plan.recency(extra, seen, since)
     extra.write(work / "streamline.json", work / "streamline_review.csv")
     stream = json.loads((work / "streamline.json").read_text(encoding="utf-8"))
-    merge(plan, stream)
+    merge(plan, stream, prefer=("names", "organizations"))
     maps_key = getattr(args, "maps_key", None)
     if maps_key:
         updates, lines = google_extras.address_plan(people, maps_key, cfg.get("region", "DE"))
@@ -277,16 +281,18 @@ def rescue_by_whatsapp(people: list, wa_rows: list, skip: set) -> list:
             for rn, s in pl.sets.items() if "phoneNumbers" in s]
 
 
-def merge(plan: dict, extra: dict) -> None:
-    """Fold the streamline updates into the fix plan: one entry per contact,
-    fix-plan fields win where both touch the same field."""
+def merge(plan: dict, extra: dict, prefer=()) -> None:
+    """Fold the live updates into the fix plan: one entry per contact. The
+    fix plan wins where both touch a field, except for `prefer` fields, which
+    come from sources newer than the card (WhatsApp, LinkedIn)."""
     by_fp = {u["fp"]: u for u in plan["updates"]}
     deleted = {d["fp"] for d in plan["deletes"]}
     for u in extra["updates"]:
         if u["fp"] in deleted:
             continue
         if u["fp"] in by_fp:
-            by_fp[u["fp"]]["set"] = {**u["set"], **by_fp[u["fp"]]["set"]}
+            fix = by_fp[u["fp"]]["set"]
+            by_fp[u["fp"]]["set"] = {**u["set"], **{k: v for k, v in fix.items() if k not in prefer or k not in u["set"]}}
         else:
             plan["updates"].append(u)
     for u in plan["updates"]:  # a list the fix plan rewrote still gets its types
