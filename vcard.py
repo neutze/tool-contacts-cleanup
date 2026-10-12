@@ -26,10 +26,10 @@ def unfold(text: str) -> list:
     """RFC 6350 line unfolding: a line starting with a space continues the last."""
     lines = []
     for raw in text.replace("\r\n", "\n").split("\n"):
-        if raw[:1] in (" ", "\t") and lines:
-            lines[-1] += raw[1:]
-        elif raw:
-            lines.append(raw)
+        if raw[:1] in (" ", "\t") and lines and raw.strip():
+            lines[-1] += raw[1:].rstrip()
+        elif raw.strip():
+            lines.append(raw.rstrip())  # iPhone writes "BEGIN:VCARD " with a trailing space
     return lines
 
 

@@ -43,6 +43,13 @@ class Parse(unittest.TestCase):
         self.assertEqual(c["emails"], [])
 
 
+class IPhone(unittest.TestCase):
+    def test_trailing_spaces_and_nameless_cards(self):
+        cards = vcard.parse("BEGIN:VCARD \nVERSION:3.0 \nN:;;;; \nTEL;type=pref:+491728929331 \nEND:VCARD \n")
+        self.assertEqual(cards[0]["phones"], [("+491728929331", "other")])
+        self.assertEqual(vcard.plan(cards, [])[0], [])  # no name, no company: not created
+
+
 class Plan(unittest.TestCase):
     def test_fills_gaps_creates_unknown_skips_empty(self):
         people = [{"resourceName": "people/1", "etag": "e",
