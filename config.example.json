@@ -1,5 +1,8 @@
 {
  "country": "49",
+ "region": "DE",
+ "delete_unreachable": true,
+ "own_domains": ["example.com"],
  "active_years": 3,
  "drop_email_domains": ["mytum.de", "in.tum.de"],
  "old_email_domains": ["former-employer.com"],

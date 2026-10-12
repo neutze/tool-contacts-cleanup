@@ -1,113 +1,122 @@
 # tool-contacts-cleanup
 
-Cleans up Google Contacts and fills in what's missing, straight through the Google People API. It reads your live contacts, decides what to delete and fix, shows you a dry run, and then changes only the fields that differ. Photos, stars, birthdays, addresses and contact ids stay as they are. There are no exports, re-imports or files to move around.
+Cleans up Google Contacts and fills in what's missing, straight through the Google People API. It reads your live contacts, decides what to delete, merge and fix, shows you a dry run, and then changes only the fields that differ. Photos, stars, birthdays, addresses and contact ids stay unless a rule names them. There are no exports, re-imports or files to move around.
+
+Sources, newest first: WhatsApp, Signal, Telegram and Gmail, then your own lists (class lists, vCards), then what's on the card. Proper names win, while nicknames, single words and emoji never replace a name.
 
 Python 3.9+, standard library only.
 
 ## Setup (once)
 
 1. Go to [console.cloud.google.com](https://console.cloud.google.com) and create a project, e.g. `contacts-sync`.
-2. Under **APIs & Services → Library**, enable **People API**. Also enable **Gmail API** if you want `--gmail`.
+2. Under **APIs & Services → Library**, enable **People API**, plus **Gmail API** for `--gmail`.
 3. Under **Google Auth Platform**:
    - **Branding:** enter an app name and your email.
    - **Audience:** choose External, then add your Gmail address as a test user.
-4. Under **Clients → Create client → Desktop app**, create a client and download the JSON. Keep it outside this repo, e.g. `~/.config/contacts-sync/client_secret.json`.
-5. Run `cp config.example.json config.json` and edit it. See [Config](#config).
+4. Under **Clients → Create client → Desktop app**, create a client and save its JSON outside this repo, e.g. `~/.config/contacts-sync/client_secret.json`.
+5. Copy `config.example.json` to `~/.config/contacts-sync/config.json` and edit it. See [Config](#config).
+6. For `--signal`, run `brew install sqlcipher`. For `--whatsapp` and `--signal`, give Terminal Full Disk Access.
 
-The first run opens your browser to log in. The token is saved in `~/.config/contacts-sync/token.json`, readable only by you. While the app is in testing mode, Google expires the login after 7 days, and the next run simply asks again.
+The first run opens your browser to log in, and the token is saved in `~/.config/contacts-sync/token.json`. On a machine without a browser, `people_sync.py --login-url` and then `--login-code <address>` log in by pasting the address the login ended on. While the app is in testing mode, Google expires the login after 7 days.
 
 ## Run
 
 ```bash
-python3 pipeline.py --client-secret ~/.config/contacts-sync/client_secret.json --config config.json            # dry run
-python3 pipeline.py --client-secret ~/.config/contacts-sync/client_secret.json --config config.json --apply    # write
+python3 pipeline.py --client-secret ~/.config/contacts-sync/client_secret.json \
+  --config ~/.config/contacts-sync/config.json --work ~/.cache/contacts-sync \
+  --gmail --other-contacts --whatsapp --signal --gravatar [--telegram result.json] [--linkedin Connections.csv]
+# check work/sync_report.txt, then the same with --apply
+python3 pipeline.py ... --merge [--apply]      # merge the duplicate groups the triage found
 ```
-
-Optional extras:
 
 | Flag | What it adds |
 |---|---|
-| `--gmail` | Treats contacts you've **sent** mail to recently as active. Reads only To/Cc/Bcc headers (`gmail.metadata` scope). |
-| `--whatsapp` | Reads WhatsApp for Mac's local database: activity, profile names (for last-name and phone suggestions), groups, and profile photos for contacts that have none. Never reads message text. Terminal needs Full Disk Access. |
-| `--linkedin Connections.csv` | Fills in company, title, email and profile link, matched on full name. Request the file at LinkedIn → Settings → Data privacy → Get a copy of your data → Connections. |
-| `--names` / `--reach` / `--group-labels FILE` | Hands back a suggestion sheet from `work/fix/` after you've filled it in (see below). |
+| `--gmail` | Treats contacts you've **sent** mail to recently as active. Reads only the To/Cc/Bcc headers of the SENT label (`gmail.metadata`). |
+| `--other-contacts` | **Other contacts** (Gmail's auto-collected addresses): copies people you've written to recently, attaches an address to the one card it clearly belongs to ("Gizem K.", `kocgizem@`), and gives a name-only card the email of an Other contact with the same name. The API can't delete Other contacts; clear them at contacts.google.com/other. |
+| `--whatsapp` | Reads WhatsApp for Mac's database: activity, profile names, groups and profile photos. Never reads message text. |
+| `--signal` | Reads Signal Desktop's profile names (first and last, set by the person), numbers, last activity and profile photos. The SQLCipher key comes from the macOS keychain. |
+| `--telegram result.json` | Telegram Desktop → Settings → Advanced → Export Telegram data → *Contacts list*, JSON. |
+| `--linkedin Connections.csv` | Current company and title, profile link, and an email where shared. A new last name is taken only on an email match. |
+| `--gravatar` | Public Gravatar photos for cards still without one. |
+| `--maps-key KEY` | Checks and formats addresses with Google's Address Validation API (needs billing). |
+| `--merge` | Merges the duplicate groups: keeps the fullest card and gives it everyone's emails, numbers, links, labels, the longest name and missing fields. |
+| `--names` / `--reach` / `--group-labels FILE` | Hands back a suggestion sheet from `work/fix/` once you've filled it in. |
 
-Everything a run writes goes into `--work` (default `./work`, gitignored):
+Other tools:
+- `add_people.py list.csv --label X`: creates or completes people from a list (class list, guest list). Data from an old list is tagged with its year, and a recorded maiden-to-married name change is applied.
+- `vcard.py contacts.vcf`: merges an iCloud, iPhone or any vCard export, filling gaps only.
 
-- `work/sync_report.txt`: every DELETE, UPDATE and SKIPPED, plus a FAILED line for anything Google rejected.
-- `work/triage/report.md`: why each contact was flagged.
-- `work/undo.json`: written only with `--apply`. It holds the full before-state of every contact the run touches.
+Everything a run writes goes into `--work`:
+- `sync_report.txt`: every DELETE, UPDATE, SKIPPED and FAILED.
+- `triage/report.md`: why each card was flagged.
+- `incomplete.csv`: cards still missing a first name, last name, or any way to reach them.
+- `undo.json`: the full before-state of every touched card, written with `--apply`.
 
-Google Contacts → Settings → **Undo changes** rolls back anything from the last 30 days.
-
-A second run right after `--apply` should report `delete 0, update 0`. If it doesn't, something changed in between, for example a Merge & fix in Google Contacts.
+Google Contacts → Settings → **Undo changes** covers 30 days. A second run right after `--apply` should report `delete 0, update 0`.
 
 ## What it decides
 
-**Delete candidates**
-- Blank cards.
-- No-reply addresses, including sending domains like `noreply.github.com`.
-- Google+ leftovers: a name plus a dead `google.com/profiles` link and nothing else, when the name isn't a proper first and last name or is a brand page (Google Deutschland, SPIEGEL ONLINE, …).
-- With activity data: email-only cards you haven't written to in `active_years`. Gmail used to save everyone you emailed as a contact.
-- Cards whose "name" is just their email address.
+**Deleted**
+- Blank cards and no-reply addresses (including `noreply.github.com`).
+- Google+ leftovers without a proper name, and Google+ brand pages.
+- Email-only cards you haven't written to in `active_years`.
+- Cards whose name is just their email address, and handles like `W33d`, `Airbnb2`, emoji or one or two letters.
+- With `delete_unreachable`: every card without a phone and an email, after the sources above have had a chance to give it one.
 
-**Kept**
-- Anything with a proper first and last name, anything you've written to recently, and anything with a phone number.
+**Fixed**
+- Dead links removed, and a country code added to numbers that start with `0`.
+- Names typed entirely in lower or upper case recapitalised.
+- Old student addresses removed, and former-employer addresses typed `old`.
+- Old Facebook-sync notes and "old number" entries removed.
+- Missing email and phone types set (home or work, mobile or other).
+- Labels added by domain or company.
+- The most recently used email or number moved first, and stale ones typed `old`.
 
-**Fixes**
-- Dead Google+ links removed.
-- Country code added to numbers that start with `0`, and the same number twice on one card kept once.
-- Names typed entirely in lower or upper case recapitalised. Mixed names like `ADAC Pannenhilfe` are left alone.
-- Old student addresses removed (`drop_email_domains`).
-- Former-employer addresses relabelled `old` (`old_email_domains`).
-- Old Facebook-sync notes cleared, and numbers labelled "old number" removed.
-- Emails labelled home or work, and phones labelled mobile or other, where they had no label.
-- Labels added by email domain or company (`labels`).
+**Names**
+- A proper WhatsApp, Signal or Telegram profile name with the card's first name sets or updates the last name (marriage).
+- LinkedIn does the same on an email match.
+- A still-missing first or last name comes from the nickname, a profile name or the company.
 
 **Duplicates**
-- Listed in `work/triage/report.md` for Google's Merge & fix. Neither the API nor this tool merges.
-- A shared landline doesn't make two people one.
-- Nickname pairs (Dimi / Dimitris) are listed.
-
-**Suggestions you confirm**, in `work/fix/`:
-- `first_name_only.csv`: contacts that are only a first name, with suggested last names from WhatsApp profile names. Fill in `last_name`, `company` or `delete`.
-- `reach_suggestions.csv`: name-only contacts with a phone number found through an exact WhatsApp profile-name match. Set `apply` to `y`.
-- `groups.csv`: your WhatsApp groups. Fill in `label` for the ones worth a label.
-
-Pass a filled-in file back with `--names`, `--reach` or `--group-labels`.
+- A shared landline doesn't make two people one, while nickname pairs (Dimi / Dimitris) are grouped.
+- `--merge` merges the groups.
 
 ## Config
 
-`config.json` (see `config.example.json`):
+`~/.config/contacts-sync/config.json` (see `config.example.json`):
 
 ```json
 {
-  "country": "49",
-  "active_years": 3,
-  "drop_email_domains": ["mytum.de"],
-  "old_email_domains": ["former-employer.com"],
+  "country": "49", "region": "DE", "active_years": 3,
+  "delete_unreachable": true, "own_domains": ["example.com"],
+  "drop_email_domains": ["mytum.de"], "old_email_domains": ["former-employer.com"],
   "labels": [["domain", "tum.de", "TUM"], ["org", "former employer", "Former Employer"]]
 }
 ```
 
-A `domain` rule matches that domain and its subdomains. An `org` rule is a case-insensitive match anywhere in the company name.
+A `domain` rule matches that domain and its subdomains. An `org` rule is a case-insensitive match anywhere in the company name. `own_domains` are your own aliases, which are never copied as contacts.
 
 ## How it stays safe
 
-- **Matching:** each planned change names its contact by a fingerprint of name, emails, phones and links. That fingerprint is matched against the live contacts at apply time. A contact that changed in between doesn't match, so it's skipped. Identical twins are only touched when the live count equals the planned count.
-- **Narrow writes:** only the fields the plan names are sent, and labels are only ever added.
-- **Per-contact results:** Google's batch update answers 200 even when single contacts fail, so each contact's own status is checked and reported.
+- **Matching:** every change names its card by a fingerprint of name, emails, phones and links, matched against the live contacts at apply time. A card that changed in between is skipped. Identical twins are only touched when the live count equals the planned count.
+- **Narrow writes:** only the named fields are sent, and labels are only ever added.
+- **Per-contact results:** each contact's own status inside a batch is checked. Quota answers (429, Gmail's 403) are retried.
+- **Matching rules:** a parents' landline never links siblings, and a list's old address never replaces one on the card.
 
 ## Files
 
 | File | Role |
 |---|---|
-| `pipeline.py` | The one command: fetch → triage → plan → dry run / apply. |
-| `contacts_cleanup.py` | Triage rules and report (also works on a Google CSV export). |
-| `contacts_fix.py` | Fixes, labels, suggestions, and `plan.json`. |
-| `live_plan.py` | Streamlining and enrichment from live data (types, signatures, birthdays, WhatsApp). |
-| `people_sync.py` | People API client, login, matching, apply, photos. |
-| `whatsapp_activity.py` | Reads WhatsApp for Mac's database (activity, profile names, groups, photos). |
+| `pipeline.py` | The one command: fetch → rescue → triage → plan → dry run / apply → photos. |
+| `contacts_cleanup.py` | Triage rules and report. |
+| `contacts_fix.py` | Fixes, labels, suggestions, `plan.json`. |
+| `live_plan.py` | Live-data passes: types, recency, names, signatures, birthdays. |
+| `people_sync.py` | People API client, login, matching, apply, photos, Gravatar. |
+| `merge.py` | Merging duplicate groups. |
+| `google_extras.py` | Other contacts, Address Validation. |
+| `messengers.py` | Signal and Telegram readers. |
+| `whatsapp_activity.py` | WhatsApp for Mac reader. |
+| `add_people.py`, `vcard.py` | Lists and vCards. |
 
 ## Tests
 
@@ -115,4 +124,4 @@ A `domain` rule matches that domain and its subdomains. An `org` rule is a case-
 python3 -m unittest
 ```
 
-The tests run against a fake People API, so no Google account is needed.
+The tests run against a fake People API, so no account is needed.
