@@ -298,7 +298,10 @@ def write_incomplete(path: Path, people: list, plan: dict) -> int:
         n.update(sets.get(fp, {}).get("names", {}))
         phones = sets.get(fp, {}).get("phoneNumbers", p.get("phoneNumbers", []))
         emails = sets.get(fp, {}).get("emailAddresses", p.get("emailAddresses", []))
-        missing = [w for w, ok in (("first name", n.get("givenName")), ("last name", n.get("familyName")),
+        business = not (n.get("givenName") or n.get("familyName")) and p.get("organizations")
+        titled = n.get("honorificPrefix") and n.get("familyName")  # "Dr Dörr", "Herr Niezjewski"
+        missing = [w for w, ok in (("first name", n.get("givenName") or business or titled),
+                                   ("last name", n.get("familyName") or business),
                                    ("phone or email", phones or emails)) if not ok]
         if missing:
             rows.append({"resourceName": p["resourceName"], "name": n.get("displayName") or

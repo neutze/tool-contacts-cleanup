@@ -123,6 +123,20 @@ class WhatsAppRescue(unittest.TestCase):
                          [("Dora Weiss", "+4917012345678")])
 
 
+class Incomplete(unittest.TestCase):
+    def test_businesses_and_titled_names_count_as_complete(self):
+        import csv
+        people = [person("people/1", "Anna"),
+                  {"resourceName": "people/2", "organizations": [{"name": "Pizza Italia"}],
+                   "phoneNumbers": [{"value": "+4981221"}]},
+                  {"resourceName": "people/3", "names": [{"honorificPrefix": "Dr", "familyName": "Dörr"}],
+                   "phoneNumbers": [{"value": "+4981222"}]}]
+        out = Path(tempfile.mkdtemp()) / "incomplete.csv"
+        self.assertEqual(pipeline.write_incomplete(out, people, {"deletes": [], "updates": []}), 1)
+        with out.open() as f:
+            self.assertEqual([r["resourceName"] for r in csv.DictReader(f)], ["people/1"])
+
+
 class Gmail(unittest.TestCase):
     def test_sent_headers_become_activity(self):
         class G:
