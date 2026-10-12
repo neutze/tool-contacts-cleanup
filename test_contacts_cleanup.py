@@ -214,6 +214,43 @@ class WhatsApp(unittest.TestCase):
         con.close()
         self.assertEqual(wa.group_rows(db), [("Volleyball", "+4915123456789")])
 
+    def test_hidden_ids_become_numbers_through_the_address_book(self):
+        tmp = Path(tempfile.mkdtemp())
+        db = tmp / "ChatStorage.sqlite"
+        con = sqlite3.connect(db)
+        con.executescript("""
+            CREATE TABLE ZWACHATSESSION (Z_PK INTEGER PRIMARY KEY, ZCONTACTJID TEXT, ZPARTNERNAME TEXT);
+            CREATE TABLE ZWAMESSAGE (Z_PK INTEGER PRIMARY KEY, ZCHATSESSION INT, ZISFROMME INT, ZMESSAGEDATE REAL);
+            CREATE TABLE ZWAGROUPMEMBER (Z_PK INTEGER PRIMARY KEY, ZCHATSESSION INT, ZMEMBERJID TEXT);
+            CREATE TABLE ZWAPROFILEPUSHNAME (Z_PK INTEGER PRIMARY KEY, ZJID TEXT, ZPUSHNAME TEXT);
+            CREATE TABLE ZWAPROFILEPICTUREITEM (Z_PK INTEGER PRIMARY KEY, ZJID TEXT, ZPATH TEXT);
+            INSERT INTO ZWACHATSESSION VALUES (1, '4915123456789@s.whatsapp.net', 'Anna'), (2, '998877@lid', 'Anna'),
+                                              (3, '555555@lid', 'Stranger'), (4, '120363@g.us', 'Volleyball');
+            INSERT INTO ZWAMESSAGE VALUES (1, 1, 1, 0), (2, 2, 1, 86400), (3, 3, 1, 50);
+            INSERT INTO ZWAGROUPMEMBER VALUES (1, 4, '998877@lid'), (2, 4, '555555@lid');
+            INSERT INTO ZWAPROFILEPUSHNAME VALUES (1, '998877@lid', 'Anna Schmidt');
+            INSERT INTO ZWAPROFILEPICTUREITEM VALUES (1, '998877@lid', 'Media/Profile/a.jpg');
+        """)
+        con.commit()
+        con.close()
+        book = sqlite3.connect(tmp / "ContactsV2.sqlite")
+        book.executescript("""
+            CREATE TABLE ZWAADDRESSBOOKCONTACT (Z_PK INTEGER PRIMARY KEY, ZLID TEXT, ZWHATSAPPID TEXT);
+            INSERT INTO ZWAADDRESSBOOKCONTACT VALUES (1, '998877@lid', '4915123456789@s.whatsapp.net');
+        """)
+        book.commit()
+        book.close()
+        prof = tmp / "Media" / "Profile"
+        prof.mkdir(parents=True)
+        (prof / "a.jpg").write_bytes(b"\xff\xd8\xff" + b"0" * 10)
+        (prof / "998877-111.thumb").write_bytes(b"\xff\xd8\xff" + b"0" * 90)
+        found, hidden = wa.rows(db)
+        self.assertEqual(found, [{"key": "+4915123456789", "channel": "whatsapp", "sent": 2,
+                                  "last_sent": "2001-01-02", "push_name": "Anna Schmidt"}])
+        self.assertEqual(hidden, 1)  # the stranger's id is in no address book
+        self.assertEqual(wa.group_rows(db), [("Volleyball", "+4915123456789")])
+        self.assertEqual({k: f.name for k, f in wa.photo_files(db).items()}, {"+4915123456789": "998877-111.thumb"})
+
 
 class WhatsAppZip(unittest.TestCase):
     def test_zip_holds_csvs_and_largest_photo_per_number(self):

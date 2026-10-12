@@ -17,8 +17,10 @@ number, for contacts_fix.py --whatsapp-groups to turn groups into labels.
 whatsapp_groups.csv and photos/+<number>.jpg, each profile photo WhatsApp has
 cached, scaled to 512 px with macOS's sips). Nothing else is written.
 
-Group chats are skipped. So are chats WhatsApp keys by a hidden id (@lid)
-instead of a phone number; the count is printed.
+Group chats are skipped. WhatsApp keys many chats, group members and profile
+pictures by a hidden id (@lid) instead of a phone number; ContactsV2.sqlite
+beside the database gives the number for everyone in your address book. A
+chat whose hidden id it doesn't know is skipped, and the count is printed.
 
 If the database can't be opened, give your terminal Full Disk Access in
 System Settings -> Privacy & Security.
@@ -49,16 +51,45 @@ SELECT s.ZCONTACTJID,
        MAX(CASE WHEN m.ZISFROMME = 1 THEN m.ZMESSAGEDATE END)
 FROM ZWACHATSESSION s
 JOIN ZWAMESSAGE m ON m.ZCHATSESSION = s.Z_PK
-WHERE s.ZCONTACTJID LIKE '%@s.whatsapp.net'
+WHERE s.ZCONTACTJID LIKE '%@s.whatsapp.net' OR s.ZCONTACTJID LIKE '%@lid'
 GROUP BY s.ZCONTACTJID
 """
-PUSH_QUERY = "SELECT ZJID, ZPUSHNAME FROM ZWAPROFILEPUSHNAME WHERE ZJID LIKE '%@s.whatsapp.net'"
+PUSH_QUERY = "SELECT ZJID, ZPUSHNAME FROM ZWAPROFILEPUSHNAME WHERE ZJID LIKE '%@s.whatsapp.net' OR ZJID LIKE '%@lid'"
+LID_QUERY = "SELECT ZLID, ZWHATSAPPID FROM ZWAADDRESSBOOKCONTACT WHERE ZLID LIKE '%@lid' AND ZWHATSAPPID LIKE '%@s.whatsapp.net'"
 GROUP_QUERY = """
 SELECT s.ZPARTNERNAME, g.ZMEMBERJID
 FROM ZWAGROUPMEMBER g
 JOIN ZWACHATSESSION s ON g.ZCHATSESSION = s.Z_PK
-WHERE s.ZCONTACTJID LIKE '%@g.us' AND g.ZMEMBERJID LIKE '%@s.whatsapp.net'
+WHERE s.ZCONTACTJID LIKE '%@g.us' AND (g.ZMEMBERJID LIKE '%@s.whatsapp.net' OR g.ZMEMBERJID LIKE '%@lid')
 """
+
+
+def lid_numbers(db: Path) -> dict:
+    """hidden id -> phone number digits, for everyone in WhatsApp's address
+    book (ContactsV2.sqlite beside the chat database). Empty when this
+    version has no such file."""
+    book = db.with_name("ContactsV2.sqlite")
+    if not book.exists():
+        return {}
+    with tempfile.TemporaryDirectory() as tmp:
+        con = sqlite3.connect(snapshot(book, Path(tmp)))
+        try:
+            if not has_columns(con, "ZWAADDRESSBOOKCONTACT", "ZLID", "ZWHATSAPPID"):
+                return {}
+            return {lid.split("@")[0]: jid.split("@")[0] for lid, jid in con.execute(LID_QUERY)}
+        finally:
+            con.close()
+
+
+def number(jid: str, lids: dict) -> str:
+    """+number for a phone-number jid or a known hidden id, else ''."""
+    user, _, domain = (jid or "").partition("@")
+    user = user.split(":")[0]  # "<id>:<device>@lid"
+    if domain == "lid":
+        user = lids.get(user, "")
+    elif domain != "s.whatsapp.net":
+        return ""
+    return "+" + user if user else ""
 
 
 def has_columns(con, table: str, *cols) -> bool:
@@ -78,7 +109,9 @@ def group_rows(db: Path):
             result = con.execute(GROUP_QUERY).fetchall()
         finally:
             con.close()
-    return sorted({((name or "").strip(), "+" + jid.split("@")[0]) for name, jid in result if (name or "").strip()})
+    lids = lid_numbers(db)
+    return sorted({((name or "").strip(), number(jid, lids)) for name, jid in result
+                   if (name or "").strip() and number(jid, lids)})
 
 
 def image_kind(path: Path) -> str:
@@ -92,26 +125,27 @@ def photo_files(db: Path) -> dict:
     ZWAPROFILEPICTUREITEM table when this version has one, and also walks
     Media/Profile, because versions differ in which they keep."""
     base = db.parent
+    lids = lid_numbers(db)
     paths = []
     with tempfile.TemporaryDirectory() as tmp:
         con = sqlite3.connect(snapshot(db, Path(tmp)))
         try:
             if has_columns(con, "ZWAPROFILEPICTUREITEM", "ZJID", "ZPATH"):
                 for jid, rel in con.execute("SELECT ZJID, ZPATH FROM ZWAPROFILEPICTUREITEM"):
-                    if jid and rel and jid.endswith("@s.whatsapp.net"):
-                        paths.append((jid.split("@")[0], base / rel))
+                    if rel and number(jid, lids):
+                        paths.append((number(jid, lids)[1:], base / rel))
         finally:
             con.close()
     profile_dir = base / "Media" / "Profile"
     if profile_dir.is_dir():
         for f in profile_dir.rglob("*"):
             m = re.match(r"^(\d{6,15})(?=[-@._])", f.name)
-            if m and f.is_file():
-                paths.append((m.group(1), f))
+            if m and f.is_file():  # the file is named after the number, or after the hidden id
+                paths.append((lids.get(m.group(1), m.group(1)), f))
     best = {}
-    for number, f in paths:
-        if f.is_file() and image_kind(f) and (number not in best or f.stat().st_size > best[number].stat().st_size):
-            best[number] = f
+    for digits, f in paths:
+        if f.is_file() and image_kind(f) and (digits not in best or f.stat().st_size > best[digits].stat().st_size):
+            best[digits] = f
     return {"+" + n: f for n, f in best.items()}
 
 
@@ -137,23 +171,31 @@ def rows(db: Path):
     with tempfile.TemporaryDirectory() as tmp:
         con = sqlite3.connect(snapshot(db, Path(tmp)))
         try:
-            hidden = con.execute(
-                "SELECT COUNT(*) FROM ZWACHATSESSION WHERE ZCONTACTJID LIKE '%@lid'").fetchone()[0]
+            hidden_ids = [j for j, in con.execute(
+                "SELECT ZCONTACTJID FROM ZWACHATSESSION WHERE ZCONTACTJID LIKE '%@lid'")]
             result = con.execute(QUERY).fetchall()
             has_push = con.execute(
                 "SELECT 1 FROM sqlite_master WHERE name = 'ZWAPROFILEPUSHNAME'").fetchone()
             push = dict(con.execute(PUSH_QUERY).fetchall()) if has_push else {}
         finally:
             con.close()
+    lids = lid_numbers(db)
+    hidden = sum(1 for j in hidden_ids if not number(j, lids))
     out = {}
+
+    def row(jid):  # one row per number: a chat under the hidden id and one under the number are the same person
+        key = number(jid, lids)
+        return out.setdefault(key, {"key": key, "channel": "whatsapp", "sent": 0,
+                                    "last_sent": "", "push_name": ""}) if key else None
     for jid, sent, last in result:
-        day = (APPLE_EPOCH + dt.timedelta(seconds=last)).date().isoformat() if sent else ""
-        out[jid] = {"key": "+" + jid.split("@")[0], "channel": "whatsapp", "sent": sent or 0,
-                    "last_sent": day, "push_name": ""}
+        r = row(jid)
+        if r is not None and sent:
+            r["sent"] += sent
+            r["last_sent"] = max(r["last_sent"], (APPLE_EPOCH + dt.timedelta(seconds=last)).date().isoformat())
     for jid, name in push.items():
-        row = out.setdefault(jid, {"key": "+" + jid.split("@")[0], "channel": "whatsapp", "sent": 0,
-                                   "last_sent": "", "push_name": ""})
-        row["push_name"] = (name or "").strip()
+        r = row(jid)
+        if r is not None and (name or "").strip():
+            r["push_name"] = (name or "").strip()
     return [r for r in out.values() if r["sent"] or r["push_name"]], hidden
 
 

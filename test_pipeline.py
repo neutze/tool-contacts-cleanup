@@ -71,6 +71,15 @@ class Pipeline(unittest.TestCase):
         summary = pipeline.run(api, None, self.cfg, args(), self.work)
         self.assertEqual((summary["delete"], summary["update"], summary["skipped"]), (0, 0, 0))
 
+    def test_keep_names_drops_only_the_name_change(self):
+        stream = {"updates": [
+            {"name": "Victoria Hauswald", "set": {"names": {"familyName": "Ostras Marotas"}}, "add_labels": []},
+            {"name": "victoria hauswald", "set": {"names": {"familyName": "X"}, "phoneNumbers": []}, "add_labels": []},
+            {"name": "Sophie Stettner", "set": {"names": {"familyName": "Müller"}}, "add_labels": []}]}
+        pipeline.keep_names(stream, ["Victoria Hauswald"])
+        self.assertEqual([(u["name"], sorted(u["set"])) for u in stream["updates"]],
+                         [("victoria hauswald", ["phoneNumbers"]), ("Sophie Stettner", ["names"])])
+
     def test_rows_fingerprint_like_the_api(self):
         rows = pipeline.to_rows(self.people, {})
         import contacts_fix

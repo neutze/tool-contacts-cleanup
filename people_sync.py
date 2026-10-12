@@ -283,6 +283,9 @@ def build_update(person: dict, changes: dict) -> tuple:
     for field in ("emailAddresses", "phoneNumbers", "urls"):
         if field in changes:
             body[field] = typed(changes[field])
+            if field != "urls" and body[field]:
+                # Google lists the primary entry first whatever order is sent, so the first one is made primary.
+                body[field][0]["metadata"] = {"sourcePrimary": True}
             mask.append(field)
     if "organizations" in changes:
         base = strip_meta((person.get("organizations") or [{}])[0])
@@ -406,6 +409,13 @@ def run(plan: dict, api, apply: bool, out: Path) -> dict:
     return summary
 
 
+def own_photo(p: dict) -> bool:
+    """True when the card itself carries a photo. The picture of the person's
+    Google account (source PROFILE) only shows through; it isn't the card's."""
+    return any(not ph.get("default") and ph.get("metadata", {}).get("source", {}).get("type", "CONTACT") == "CONTACT"
+               for ph in p.get("photos", []))
+
+
 def photo_matches(people: list, photos: Path) -> tuple:
     """(person, file) for contacts without a photo of their own that one photo
     file's number belongs to, and the reasons the others were skipped."""
@@ -422,7 +432,7 @@ def photo_matches(people: list, photos: Path) -> tuple:
         if not keys:
             continue
         name = (p.get("names") or [{}])[0].get("displayName", "(no name)")
-        if any(not ph.get("default") for ph in p.get("photos", [])):
+        if own_photo(p):
             skipped.append((name, "already has a photo"))
         elif len(owners[keys[0]]) > 1:
             skipped.append((name, "number shared with another contact"))

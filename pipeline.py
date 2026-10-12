@@ -258,6 +258,7 @@ def run(api, gmail_api, cfg: dict, args, work: Path) -> dict:
     live_plan.recency(extra, seen, since)
     extra.write(work / "streamline.json", work / "streamline_review.csv")
     stream = json.loads((work / "streamline.json").read_text(encoding="utf-8"))
+    keep_names(stream, cfg.get("keep_names", []))
     merge(plan, stream, prefer=("names", "organizations"))
     maps_key = getattr(args, "maps_key", None)
     if maps_key:
@@ -335,6 +336,17 @@ def rescue_by_whatsapp(people: list, wa_rows: list, skip: set) -> list:
     return [{"fp": ps.person_fingerprint(pl.people[rn]), "name": (pl.people[rn].get("names") or [{}])[0].get(
         "displayName", ""), "set": {"phoneNumbers": s["phoneNumbers"]}, "add_labels": []}
             for rn, s in pl.sets.items() if "phoneNumbers" in s]
+
+
+def keep_names(stream: dict, names: list) -> None:
+    """Drop the name change for the cards listed in config `keep_names`: a
+    profile name you looked at and decided against (a nickname that reads like
+    a full name)."""
+    keep = {n.strip().lower() for n in names}
+    for u in stream["updates"]:
+        if u.get("name", "").strip().lower() in keep:
+            u["set"].pop("names", None)
+    stream["updates"] = [u for u in stream["updates"] if u["set"] or u.get("add_labels")]
 
 
 def merge(plan: dict, extra: dict, prefer=()) -> None:

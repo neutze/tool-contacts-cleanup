@@ -127,6 +127,14 @@ class Sync(unittest.TestCase):
         self.assertEqual(mask, "names")
         self.assertEqual(body["names"], [{"givenName": "Hans", "familyName": "Meier", "honorificPrefix": "Dr."}])
 
+    def test_first_number_is_written_as_primary_so_the_order_sticks(self):
+        body, mask = ps.build_update({"etag": "e"}, {"phoneNumbers": [{"value": "+49 151 1", "type": "mobile"},
+                                                                     {"value": "+49 89 2", "type": "home"}],
+                                                     "urls": [{"value": "https://x.de"}]})
+        self.assertEqual(body["phoneNumbers"][0]["metadata"], {"sourcePrimary": True})
+        self.assertNotIn("metadata", body["phoneNumbers"][1])
+        self.assertNotIn("metadata", body["urls"][0])
+
 
 class Fingerprint(unittest.TestCase):
     def test_csv_and_api_forms_agree(self):
@@ -182,6 +190,21 @@ class Photos(unittest.TestCase):
         self.assertEqual([(p["resourceName"], f.name) for p, f in matches], [("people/a", "+491511111111.jpg")])
         self.assertEqual(sorted(skipped), [("B", "already has a photo"), ("C", "number shared with another contact"),
                                            ("D", "number shared with another contact")])
+
+    def test_google_account_picture_is_not_the_cards_own_photo(self):
+        tmp = Path(tempfile.mkdtemp())
+        for n in ("+491511111111", "+491512222222"):
+            (tmp / f"{n}.jpg").write_bytes(b"\xff\xd8\xff")
+        profile = {"url": "p", "metadata": {"source": {"type": "PROFILE"}}}
+        people = [
+            {"resourceName": "people/a", "names": [{"displayName": "A"}], "phoneNumbers": [{"value": "+491511111111"}],
+             "photos": [{"default": True, "metadata": {"source": {"type": "CONTACT"}}}, profile]},
+            {"resourceName": "people/b", "names": [{"displayName": "B"}], "phoneNumbers": [{"value": "+491512222222"}],
+             "photos": [{"url": "c", "metadata": {"source": {"type": "CONTACT"}}}, profile]},
+        ]
+        matches, skipped = ps.photo_matches(people, tmp)
+        self.assertEqual([p["resourceName"] for p, _ in matches], ["people/a"])
+        self.assertEqual(skipped, [("B", "already has a photo")])
 
     def test_apply_uploads_bytes(self):
         tmp = Path(tempfile.mkdtemp())

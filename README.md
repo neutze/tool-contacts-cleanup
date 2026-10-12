@@ -94,7 +94,7 @@ Google Contacts → Settings → **Undo changes** covers 30 days. A second run r
 }
 ```
 
-A `domain` rule matches that domain and its subdomains. An `org` rule is a case-insensitive match anywhere in the company name. `own_domains` and `own_names` are you: your aliases and your name are never copied as contacts.
+A `domain` rule matches that domain and its subdomains. An `org` rule is a case-insensitive match anywhere in the company name. `own_domains` and `own_names` are you: your aliases and your name are never copied as contacts. `keep_names` lists cards (by their full name) whose name is never changed, for a profile name you decided against.
 
 ## How it stays safe
 
