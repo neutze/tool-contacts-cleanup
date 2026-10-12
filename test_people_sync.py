@@ -213,3 +213,31 @@ class Failures(unittest.TestCase):
         summary = ps.run(plan, api, apply=True, out=tmp)
         self.assertEqual(summary["failed"], 1)
         self.assertIn("FAILED people/a: bad", (tmp / "sync_report.txt").read_text())
+
+
+class Retry(unittest.TestCase):
+    def test_gmail_quota_403_is_retried(self):
+        import io
+        import urllib.error
+        calls = []
+
+        def fake(req):
+            calls.append(1)
+            if len(calls) == 1:
+                raise urllib.error.HTTPError(req.full_url, 403, "x", {}, io.BytesIO(b'{"message": "Quota exceeded"}'))
+            return io.BytesIO(b'{"ok": 1}')
+
+        class Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+        orig_open, orig_sleep = ps.urllib.request.urlopen, ps.time.sleep
+        ps.urllib.request.urlopen = lambda req: Resp(fake(req).getvalue())
+        ps.time.sleep = lambda s: None
+        try:
+            self.assertEqual(ps.Api("t").call("GET", "/x"), {"ok": 1})
+            self.assertEqual(len(calls), 2)
+        finally:
+            ps.urllib.request.urlopen, ps.time.sleep = orig_open, orig_sleep

@@ -222,10 +222,13 @@ class Api:
                     raw = r.read()
                     return json.loads(raw) if raw else {}
             except urllib.error.HTTPError as e:
-                if e.code in (429, 500, 502, 503) and attempt < 5:
-                    time.sleep(2 ** attempt * 5)  # People API write quota is per minute
+                text = e.read().decode(errors="replace")
+                # Quotas are per minute; Gmail reports an exceeded one as 403, not 429.
+                limited = e.code in (429, 500, 502, 503) or (e.code == 403 and "uota" in text or "ateLimit" in text)
+                if limited and attempt < 5:
+                    time.sleep(min(2 ** attempt * 5, 65))
                     continue
-                raise SystemExit(f"{method} {path} failed: {e.code} {e.read().decode()[:500]}")
+                raise SystemExit(f"{method} {path} failed: {e.code} {text[:500]}")
         return {}
 
 
