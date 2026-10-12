@@ -240,7 +240,7 @@ def clean_name(text: str) -> str:
 def complete_names(plan: Plan, push_rows: list = ()) -> None:
     """Everyone gets a first and a last name. Run after the proper sources
     (WhatsApp, LinkedIn) have had their say. A missing part comes from, in
-    order: the card's nickname, the WhatsApp profile name, the company."""
+    order: the card's nickname, the WhatsApp profile name."""
     by_phone = {phone_key(r["key"]): clean_name(r.get("push_name", "")) for r in push_rows
                 if clean_name(r.get("push_name", ""))}
     for rn, p in plan.people.items():
@@ -258,8 +258,8 @@ def complete_names(plan: Plan, push_rows: list = ()) -> None:
                         f"{given} -> {words[0]} | {' '.join(words[1:])}")
             continue
         pushes = [by_phone.get(phone_key(x["value"]), "") for x in p.get("phoneNumbers", [])]
-        hints = [clean_name(x.get("value", "")) for x in p.get("nicknames", [])] + [x for x in pushes if x] \
-            + [clean_name(o.get("name", "")) for o in p.get("organizations", [])]
+        # The company is not a last name: "Carlo" at CrossFit stays "Carlo", with CrossFit as company.
+        hints = [clean_name(x.get("value", "")) for x in p.get("nicknames", [])] + [x for x in pushes if x]
         have = fold(given or family)
         fill = ""
         for h in hints:

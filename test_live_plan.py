@@ -64,7 +64,7 @@ class Truth(unittest.TestCase):
 
 
 class CompleteNames(unittest.TestCase):
-    def test_gaps_filled_from_nickname_then_whatsapp_then_company(self):
+    def test_gaps_filled_from_nickname_then_whatsapp(self):
         pl = plan({"names": [{"givenName": "Dario"}], "nicknames": [{"value": "Mr. D"}]},
                   {"names": [{"givenName": "Pero"}], "phoneNumbers": [{"value": "+491769852"}]},
                   {"names": [{"givenName": "Taxi"}], "organizations": [{"name": "Isar Funk"}]},
@@ -73,7 +73,7 @@ class CompleteNames(unittest.TestCase):
         lp.complete_names(pl, [{"key": "+491769852", "push_name": "Pero 🎸 Kovac"}])
         got = {rn: (s["names"]["givenName"], s["names"]["familyName"]) for rn, s in pl.sets.items()}
         self.assertEqual(got, {"people/0": ("Dario", "Mr D"), "people/1": ("Pero", "Kovac"),
-                               "people/2": ("Taxi", "Isar Funk"), "people/3": ("Dennis", "Herr")})
+                               "people/3": ("Dennis", "Herr")})  # a company never becomes a last name
 
     def test_full_name_in_the_first_name_field_is_split(self):
         pl = plan({"names": [{"givenName": "Charles Njofack"}]}, {"names": [{"givenName": "Walk The Cat 2"}]})
