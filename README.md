@@ -4,7 +4,7 @@ Cleans up Google Contacts and fills in what's missing, straight through the Goog
 
 Sources, newest first: WhatsApp, Signal, Telegram and Gmail, then your own lists (class lists, vCards), then what's on the card. Proper names win, while nicknames, single words and emoji never replace a name.
 
-Python 3.9+, standard library only.
+Python 3.9+, standard library only. The routine for a full pass, and what the People API cannot do, is in [HOWTO.md](HOWTO.md).
 
 ## Setup (once)
 
@@ -17,7 +17,7 @@ Python 3.9+, standard library only.
 5. Copy `config.example.json` to `~/.config/contacts-sync/config.json` and edit it. See [Config](#config).
 6. For `--signal`, run `brew install sqlcipher`. For `--whatsapp` and `--signal`, give Terminal Full Disk Access.
 
-The first run opens your browser to log in, and the token is saved in `~/.config/contacts-sync/token.json`. On a machine without a browser, `people_sync.py --login-url` and then `--login-code <address>` log in by pasting the address the login ended on. While the app is in testing mode, Google expires the login after 7 days.
+The first run opens your browser to log in, and the token is saved in `~/.config/contacts-sync/token.json`. On a machine without a browser, `people_sync.py --login-url` and then `--login-code <address>` log in by pasting the address the login ended on. While the app is in testing mode, Google expires the login after 7 days; set **Audience → Publishing status** to *In production* and the saved login keeps working without a browser.
 
 ## Run
 
@@ -115,7 +115,7 @@ A `domain` rule matches that domain and its subdomains. An `org` rule is a case-
 | `merge.py` | Merging duplicate groups. |
 | `google_extras.py` | Other contacts, Address Validation. |
 | `messengers.py` | Signal and Telegram readers. |
-| `whatsapp_activity.py` | WhatsApp for Mac reader. |
+| `whatsapp_activity.py` | WhatsApp for Mac reader, hidden ids (`@lid`) included. |
 | `add_people.py`, `vcard.py` | Lists and vCards. |
 
 ## Tests
