@@ -54,6 +54,18 @@ Everything a run writes goes into `--work`:
 
 Google Contacts → Settings → **Undo changes** covers 30 days. A second run right after `--apply` should report `delete 0, update 0`.
 
+## Iris sync
+
+`iris_sync.py` keeps Iris's people and Google Contacts in step (Iris's spec: *Sync People with Google Contacts*). It runs on the Mac as the job `de.neutze.iris.contacts` (job-status name `iris-contacts`), hourly and whenever Iris saves an answer, with the login above. Planned 2026-10-17, not built yet.
+
+```bash
+python3 iris_sync.py --client-secret ~/.config/contacts-sync/client_secret.json --pictures ~/Pictures/_inbox [--apply]
+```
+
+- **Export:** every contact that is a person goes into `<pictures>/.iris/contacts.vcf` as vCard 4.0 with only its full name, given and family name, birthday and Google id (`UID`). A birthday without a year stays `--MM-DD`; a custom field `Birth year` fills in the year, or stands alone as `BDAY:YYYY`. Written to a temporary file, then moved over the old one.
+- **Answers:** Iris writes one line per yes or no into `<pictures>/.iris/contacts-answers.jsonl`. For each yes not yet in `contacts-sent.jsonl` the contact is read live; only when it still lacks the value is the birthday (or `Birth year`) added, or a new contact with just a name and birthday created. Nothing is ever overwritten or deleted, and each result is a line in `contacts-sent.jsonl`. Without `--apply` it only says what it would send.
+- **Never in this repo:** the vCard and the answers hold names and birthdays; they live in the pictures folder on the Mac only.
+
 ## What it decides
 
 **Deleted**
