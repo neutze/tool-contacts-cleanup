@@ -9,7 +9,7 @@ Each run:
   1. writes <pictures>/.iris/contacts.vcf: every contact that is a person, with
      only its name, birthday and Google id, as vCard 4.0;
   2. writes <pictures>/.iris/contacts-wishes.json: the day and month of the
-     birthday wishes you sent on WhatsApp to contacts without a birthday. The
+     birthday wishes you sent on WhatsApp, with the birthday Google has. The
      words are matched inside WhatsApp's database; no message text is selected;
   3. sends, with --apply, every yes in <pictures>/.iris/contacts-answers.jsonl
      not yet in contacts-sent.jsonl, after reading the contact live. Google is
@@ -147,8 +147,10 @@ def wish_rows(db: Path) -> list:
 
 
 def wishes(rows: list, people: list) -> list:
-    """One suggestion per contact without a birthday whose number belongs to
-    it alone and whose wishes all fall on one day of the year."""
+    """One suggestion per contact whose number belongs to it alone and whose
+    wishes all fall on one day of the year, with the birthday Google has
+    (google, '' for none), so Iris can show both. A wish on Google's own
+    day is no suggestion."""
     owners = collections.defaultdict(set)
     for p in people:
         if is_person(p):
@@ -164,10 +166,14 @@ def wishes(rows: list, people: list) -> list:
             days[next(iter(rns))][(date.month, date.day)].add(date.year)
     out = []
     for rn, found in sorted(days.items()):
-        if len(found) != 1 or birthday_of(by_rn[rn]):
+        if len(found) != 1:
             continue
         (month, day), years = next(iter(found.items()))
-        out.append({"uid": rn, "name": full_name(by_rn[rn]), "month": month, "day": day, "years": sorted(years)})
+        have = birthday_of(by_rn[rn])
+        if have and (have["month"], have["day"]) == (month, day):
+            continue
+        out.append({"uid": rn, "name": full_name(by_rn[rn]), "month": month, "day": day, "years": sorted(years),
+                    "google": iso(have)})
     return out
 
 
