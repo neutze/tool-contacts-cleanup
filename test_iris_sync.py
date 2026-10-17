@@ -105,6 +105,60 @@ class Wishes(unittest.TestCase):
         self.assertNotIn("ZTEXT", select)
 
 
+class AndroidWishes(unittest.TestCase):
+    def make_db(self, path, with_map=True):
+        import sqlite3
+        con = sqlite3.connect(path)
+        con.executescript("""
+            CREATE TABLE jid (_id INTEGER PRIMARY KEY, user TEXT, server TEXT, raw_string TEXT);
+            CREATE TABLE chat (_id INTEGER PRIMARY KEY, jid_row_id INTEGER);
+            CREATE TABLE message (_id INTEGER PRIMARY KEY, chat_row_id INTEGER, from_me INTEGER,
+                                  timestamp INTEGER, text_data TEXT);
+            INSERT INTO jid VALUES (1, '4915123456789', 's.whatsapp.net', NULL), (2, '123', 'g.us', NULL),
+                                   (3, '999', 'lid', NULL), (4, '491702222222', 's.whatsapp.net', NULL);
+            INSERT INTO chat VALUES (1, 1), (2, 2), (3, 3);
+        """)
+        if with_map:
+            con.executescript("CREATE TABLE jid_map (lid_row_id INTEGER, jid_row_id INTEGER); INSERT INTO jid_map VALUES (3, 4);")
+        noon = int(dt.datetime(2019, 3, 12, 12).timestamp() * 1000)
+        con.executemany("INSERT INTO message (chat_row_id, from_me, timestamp, text_data) VALUES (?, ?, ?, ?)", [
+            (1, 1, noon, "Alles Gute zum Geburtstag!"), (1, 0, noon, "Happy birthday back"),  # received: not a wish
+            (1, 1, noon, "see you"), (2, 1, noon, "HBD"),  # a group
+            (3, 1, noon, "happy bday")])
+        con.commit()
+        con.close()
+
+    def test_sent_one_to_one_wishes_with_hidden_ids_mapped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "msgstore.db"
+            self.make_db(db)
+            self.assertEqual(sorted(iris.android_wish_rows(db)),
+                             [("+4915123456789", dt.date(2019, 3, 12)), ("+491702222222", dt.date(2019, 3, 12))])
+            db2 = Path(tmp) / "old.db"
+            self.make_db(db2, with_map=False)
+            self.assertEqual(iris.android_wish_rows(db2), [("+4915123456789", dt.date(2019, 3, 12))])
+
+    def test_rows_survive_the_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "android-wishes.json"
+            rows = [("+491", dt.date(2019, 3, 12)), ("+491", dt.date(2019, 3, 12))]
+            iris.save_rows(path, rows)
+            self.assertEqual(iris.load_rows(path), rows[:1])
+            self.assertEqual(iris.load_rows(Path(tmp) / "none.json"), [])
+
+    def test_query_never_selects_text(self):
+        select = iris.ANDROID_WISH_QUERY.split("FROM")[0]
+        self.assertNotIn("text_data", select)
+
+    def test_not_a_msgstore(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "x.db"
+            sqlite3.connect(db).close()
+            with self.assertRaises(sqlite3.DatabaseError):
+                iris.android_wish_rows(db)
+
+
 class Answers(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -125,7 +179,7 @@ class Answers(unittest.TestCase):
         return iris.read_jsonl(self.pictures / ".iris/contacts-sent.jsonl")
 
     def run_(self, api, apply=True):
-        return iris.run(api, self.pictures, apply, None, log=lambda *_: None)
+        return iris.run(api, self.pictures, apply, None, log=lambda *_: None, android_rows=self.pictures / "none.json")
 
     def test_adds_a_missing_birthday_once(self):
         api = FakeApi([person("people/1", "Anna", "M")])

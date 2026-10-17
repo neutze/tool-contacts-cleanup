@@ -65,6 +65,14 @@ python3 iris_sync.py --client-secret ~/.config/contacts-sync/client_secret.json 
 - **Export:** every contact that is a person goes into `<pictures>/.iris/contacts.vcf` as vCard 4.0 with only its full name, given and family name, birthday and Google id (`UID`). A birthday without a year stays `--MM-DD`; a year alone is never sent to Google (it stays in Iris). Written to a temporary file, then moved over the old one.
 - **Answers:** Iris writes one line per yes or no into `<pictures>/.iris/contacts-answers.jsonl`. For each yes not yet in `contacts-sent.jsonl` the contact is read live; only when it still lacks the value is the birthday added, or a new contact with just a name and birthday created. The one overwrite is a birthday on Iris's "Iris's wins" card, sent only while Google still has the date the card showed. Nothing is ever deleted, and each result is a line in `contacts-sent.jsonl`; the state before each write is a line in `work/iris-undo.jsonl`. Without `--apply` it only says what it would send.
 - **WhatsApp wishes:** the birthday wishes you sent in one-to-one chats ("Geburtstag", "Purzeltag", "birthday", "bday", "HBD", "alles Gute") give a day and month for a contact, with the birthday Google has beside it (a wish on that very day is left out), in `<pictures>/.iris/contacts-wishes.json`. The words are matched inside the database; message text is never selected, printed or kept, so the rule of `whatsapp_activity.py` holds. Iris shows each as a check-the-day card.
+- **WhatsApp wishes from an Android phone:** the Mac's WhatsApp holds only the history synced to it. The phone's full history comes from its backup `msgstore.db.crypt15`, made with a 64-digit end-to-end key (WhatsApp > Settings > Chats > Chat backup > End-to-end encrypted backup). You copy it to the Mac and decrypt it yourself, so the key never leaves your hands:
+
+  ```bash
+  python3 -m venv ~/.venvs/wa && ~/.venvs/wa/bin/pip install wa-crypt-tools
+  read -rs "KEY?64-digit key: " && ~/.venvs/wa/bin/wadecrypt "$KEY" ~/Downloads/msgstore.db.crypt15 ~/Downloads/msgstore.db; unset KEY
+  ```
+
+  Then `python3 iris_sync.py --pictures ~/Pictures/_inbox --android-db ~/Downloads/msgstore.db` matches the same words in the phone's `message`, `chat` and `jid` tables (sent by you, one-to-one chats, text never selected) and keeps only each wish's number and date in `work/android-wishes.json`. Every later run adds those to the Mac's wishes, so the decrypted `msgstore.db` can go to the Trash afterwards.
 - **Never in this repo:** the vCard and the answers hold names and birthdays; they live in the pictures folder on the Mac only.
 
 ## What it decides
