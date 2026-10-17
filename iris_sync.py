@@ -10,7 +10,10 @@ Each run:
      only its name, birthday and Google id, as vCard 4.0;
   2. writes <pictures>/.iris/contacts-wishes.json: the day and month of the
      birthday wishes you sent on WhatsApp, with the birthday Google has. The
-     words are matched inside WhatsApp's database; no message text is selected;
+     words are matched inside WhatsApp's database; no message text is selected.
+     --android-db <msgstore.db> once reads an Android phone's decrypted backup
+     the same way and keeps each wish's number and date in work/android-wishes.json,
+     which every later run adds to the Mac's wishes;
   3. sends, with --apply, every yes in <pictures>/.iris/contacts-answers.jsonl
      not yet in contacts-sent.jsonl, after reading the contact live. Google is
      only added to; the one overwrite is a yes on Iris's "Iris's wins" card,
@@ -46,6 +49,17 @@ WHERE m.ZISFROMME = 1
   AND (s.ZCONTACTJID LIKE '%@s.whatsapp.net' OR s.ZCONTACTJID LIKE '%@lid')
   AND ({})
 """.format(" OR ".join("lower(m.ZTEXT) LIKE ?" for _ in WISH_WORDS))
+ANDROID_WISH_QUERY = """
+SELECT j.user || '@' || j.server, {mapped} m.timestamp
+FROM message m
+JOIN chat c ON m.chat_row_id = c._id
+JOIN jid j ON c.jid_row_id = j._id
+{join}
+WHERE m.from_me = 1
+  AND j.server IN ('s.whatsapp.net', 'lid')
+  AND ({like})
+""".replace("{like}", " OR ".join("lower(m.text_data) LIKE ?" for _ in WISH_WORDS))
+ANDROID_WISHES = Path(__file__).parent / "work" / "android-wishes.json"
 KINDS_TO_SEND = {"add-birthday", "create", "overwrite", "wish"}
 UNDO = Path(__file__).parent / "work" / "iris-undo.jsonl"
 
@@ -144,6 +158,43 @@ def wish_rows(db: Path) -> list:
         if number and seconds is not None:
             out.append((number, (wa.APPLE_EPOCH + dt.timedelta(seconds=seconds)).astimezone().date()))
     return out
+
+
+def android_wish_rows(db: Path) -> list:
+    """(number, local date) of each birthday wish you sent in a one-to-one chat,
+    from an Android phone's decrypted msgstore.db. A chat under a hidden id
+    takes its number from jid_map where this version has it."""
+    con = sqlite3.connect(f"file:{db}?mode=ro&immutable=1", uri=True)
+    try:
+        tables = {n for n, in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if not {"message", "chat", "jid"} <= tables:
+            raise sqlite3.DatabaseError("not an Android msgstore.db (no message, chat and jid tables)")
+        if "jid_map" in tables:
+            query = ANDROID_WISH_QUERY.format(
+                mapped="pj.user || '@' || pj.server,",
+                join="LEFT JOIN jid_map jm ON jm.lid_row_id = j._id\nLEFT JOIN jid pj ON pj._id = jm.jid_row_id")
+        else:
+            query = ANDROID_WISH_QUERY.format(mapped="NULL,", join="")
+        rows = con.execute(query, [f"%{w}%" for w in WISH_WORDS]).fetchall()
+    finally:
+        con.close()
+    out = []
+    for jid, phone_jid, millis in rows:
+        number = wa.number(phone_jid or jid, {})
+        if number and millis:
+            out.append((number, dt.datetime.fromtimestamp(millis / 1000, dt.timezone.utc).astimezone().date()))
+    return out
+
+
+def save_rows(path: Path, rows: list) -> None:
+    unique = sorted({(n, d.isoformat()) for n, d in rows})
+    write_atomic(path, json.dumps([{"number": n, "date": d} for n, d in unique], indent=1) + "\n")
+
+
+def load_rows(path: Path) -> list:
+    if not path.exists():
+        return []
+    return [(r["number"], dt.date.fromisoformat(r["date"])) for r in json.loads(path.read_text(encoding="utf-8"))]
 
 
 def wishes(rows: list, people: list) -> list:
@@ -286,15 +337,18 @@ def now() -> str:
 
 # ---- the run -----------------------------------------------------------------
 
-def run(api, pictures: Path, apply: bool, whatsapp_db: Path | None, log=print) -> dict:
+def run(api, pictures: Path, apply: bool, whatsapp_db: Path | None, log=print,
+        android_rows: Path = ANDROID_WISHES) -> dict:
     people = ps.fetch_all(api, EXPORT_FIELDS + ",phoneNumbers")
     iris = pictures / ".iris"
     write_atomic(iris / "contacts.vcf", vcard(people))
     summary = {"contacts": sum(1 for p in people if is_person(p)),
                "with birthday": sum(1 for p in people if is_person(p) and birthday_of(p))}
-    if whatsapp_db is not None:
+    phone = load_rows(android_rows)
+    if whatsapp_db is not None or phone:
         try:
-            found = wishes(wish_rows(whatsapp_db), people)
+            mac = wish_rows(whatsapp_db) if whatsapp_db is not None else []
+            found = wishes(sorted(set(mac + phone)), people)
             write_atomic(iris / "contacts-wishes.json", json.dumps(found, ensure_ascii=False, indent=1) + "\n")
             summary["wishes"] = len(found)
         except (sqlite3.Error, OSError) as e:
@@ -331,10 +385,16 @@ def main(argv=None) -> int:
     ap.add_argument("--pictures", type=Path, required=True, help="the picture inbox; files go into its .iris/")
     ap.add_argument("--whatsapp-db", type=Path, default=wa.DEFAULT_DB)
     ap.add_argument("--no-whatsapp", action="store_true")
+    ap.add_argument("--android-db", type=Path, help="an Android phone's decrypted msgstore.db, read once into "
+                    "work/android-wishes.json (number and date of each wish)")
     ap.add_argument("--apply", action="store_true", help="send the answers marked yes to Google")
     args = ap.parse_args(argv)
     if not (args.pictures / ".iris").is_dir():
         sys.exit(f"{args.pictures}/.iris does not exist: is the picture inbox there?")
+    if args.android_db is not None:
+        rows = android_wish_rows(args.android_db.expanduser())
+        save_rows(ANDROID_WISHES, rows)
+        print(f"Android: {len(rows)} wishes in {len({n for n, _ in rows})} chats kept in {ANDROID_WISHES}")
     secret = args.client_secret.expanduser()
     token = ps.access_token if sys.stdin.isatty() else job_token  # a job never waits on a browser
     api = ps.Api(token(secret), refresh=lambda: token(secret, force_refresh=True))
