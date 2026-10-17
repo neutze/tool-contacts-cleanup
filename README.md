@@ -54,6 +54,19 @@ Everything a run writes goes into `--work`:
 
 Google Contacts → Settings → **Undo changes** covers 30 days. A second run right after `--apply` should report `delete 0, update 0`.
 
+## Iris sync
+
+`iris_sync.py` keeps Iris's people and Google Contacts in step (Iris's spec: *Sync People with Google Contacts*). It runs on the Mac as the job `de.neutze.iris.contacts` (job-status name `iris-contacts`), hourly and whenever Iris saves an answer, with the login above. Built 2026-10-17.
+
+```bash
+python3 iris_sync.py --client-secret ~/.config/contacts-sync/client_secret.json --pictures ~/Pictures/_inbox [--apply]
+```
+
+- **Export:** every contact that is a person goes into `<pictures>/.iris/contacts.vcf` as vCard 4.0 with only its full name, given and family name, birthday and Google id (`UID`). A birthday without a year stays `--MM-DD`; a year alone is never sent to Google (it stays in Iris). Written to a temporary file, then moved over the old one.
+- **Answers:** Iris writes one line per yes or no into `<pictures>/.iris/contacts-answers.jsonl`. For each yes not yet in `contacts-sent.jsonl` the contact is read live; only when it still lacks the value is the birthday added, or a new contact with just a name and birthday created. The one overwrite is a birthday on Iris's "Iris's wins" card, sent only while Google still has the date the card showed. Nothing is ever deleted, and each result is a line in `contacts-sent.jsonl`; the state before each write is a line in `work/iris-undo.jsonl`. Without `--apply` it only says what it would send.
+- **WhatsApp wishes:** the birthday wishes you sent in one-to-one chats ("Geburtstag", "Purzeltag", "birthday", "bday", "HBD", "alles Gute") give a day and month for a contact without a birthday, in `<pictures>/.iris/contacts-wishes.json`. The words are matched inside the database; message text is never selected, printed or kept, so the rule of `whatsapp_activity.py` holds. Iris shows each as a check-the-day card.
+- **Never in this repo:** the vCard and the answers hold names and birthdays; they live in the pictures folder on the Mac only.
+
 ## What it decides
 
 **Deleted**
@@ -117,6 +130,7 @@ A `domain` rule matches that domain and its subdomains. An `org` rule is a case-
 | `messengers.py` | Signal and Telegram readers. |
 | `whatsapp_activity.py` | WhatsApp for Mac reader, hidden ids (`@lid`) included. |
 | `add_people.py`, `vcard.py` | Lists and vCards. |
+| `iris_sync.py` | Iris's contacts.vcf, WhatsApp birthday wishes, and the birthdays and people approved in Iris. |
 
 ## Tests
 
