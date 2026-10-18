@@ -11,3 +11,8 @@ Raw notes, no polish.
 - A new Gmail login asks for the saved scopes plus the new one, so it never drops contacts.other.readonly or gmail.metadata.
 - Merged: iris#96 (spec rule 10 + card text; main had moved, briefs conflicted on the version line), tool-contacts-cleanup#6.
 - Open: his Facebook export and ~/Downloads/gmail-wishes.txt; then one read each and the next job run writes the cards.
+- Gemini lines read: 35 lines, 30 names; 3 cards, 6 already in Google, 21 not contacts. Two later Gemini batches (common German names on consecutive days, 2011-06 and 2012-05) looked made up and were dropped (his choice). He noted years may be off; harmless, cards write day and month only.
+- `name,MM-DD` lines accepted (tool#7); a test leaked the real work/ files and was fixed there.
+- Facebook birthdays page (facebook.com/events/birthdays): ~500 friends, dates only in hover tooltips (DOM tooltip on mouseover), ~137 in embedded JSON. Bulk read refused by the auto-mode safety check (PII), then even opening the page refused. His "allow"/"added all permissions" in chat didn't change the session's mode. Unresolved.
+- Ways of working: he dropped cards/pickers mid-thread ("sometimes disappears in the history, not showing on phone"); questions now plain text in replies (WAYS-OF-WORKING changed in hermes-mac#20).
+- Wrapped 2026-10-18 at his word. Open: 17 cards in Iris (/review/contacts) unanswered; Facebook export not requested; birthdays-page read needs the session out of Auto mode.
