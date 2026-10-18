@@ -73,6 +73,9 @@ python3 iris_sync.py --client-secret ~/.config/contacts-sync/client_secret.json 
   ```
 
   Then `python3 iris_sync.py --pictures ~/Pictures/_inbox --android-db ~/Downloads/msgstore.db` matches the same words in the phone's `message`, `chat` and `jid` tables (sent by you, one-to-one chats, text never selected) and keeps only each wish's number and date in `work/android-wishes.json`. Every later run adds those to the Mac's wishes, so the decrypted `msgstore.db` can go to the Trash afterwards.
+- **Facebook and Gmail wishes** (Iris's rule 10): read once each into `work/`, keeping only who and when, and added to the WhatsApp wishes by every run; the same words, one-day rule and "Google's birthday stands" apply, and the card names each source.
+  - `python3 iris_sync.py --pictures ~/Pictures/_inbox --facebook ~/Downloads/facebook-*.zip` reads Facebook's "Download your information" export (JSON, Messages and Posts) inside the zips: messages you sent in a chat with one other person and your posts on someone's timeline. Kept: name and date in `work/facebook-wishes.json`, matched to the one contact of that full name.
+  - `--gmail-list ~/Downloads/gmail-wishes.txt` adds lines of `address,YYYY-MM-DD` (as a Gemini prompt in Gmail lists your sent wishes) to `work/gmail-wishes.json`. `--gmail-wishes subject` walks your sent mail with the `gmail.metadata` login and matches the words in subjects; `--gmail-wishes search` lets Gmail match the whole mail and needs a `gmail.readonly` login (the new login keeps every scope the saved one had). Only mails to one address count, matched by the contact's email; only headers are read.
 - **Never in this repo:** the vCard and the answers hold names and birthdays; they live in the pictures folder on the Mac only.
 
 ## What it decides
@@ -138,7 +141,7 @@ A `domain` rule matches that domain and its subdomains. An `org` rule is a case-
 | `messengers.py` | Signal and Telegram readers. |
 | `whatsapp_activity.py` | WhatsApp for Mac reader, hidden ids (`@lid`) included. |
 | `add_people.py`, `vcard.py` | Lists and vCards. |
-| `iris_sync.py` | Iris's contacts.vcf, WhatsApp birthday wishes, and the birthdays and people approved in Iris. |
+| `iris_sync.py` | Iris's contacts.vcf, WhatsApp, Facebook and Gmail birthday wishes, and the birthdays and people approved in Iris. |
 
 ## Tests
 
