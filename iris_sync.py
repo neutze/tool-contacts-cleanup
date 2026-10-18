@@ -193,6 +193,7 @@ def android_wish_rows(db: Path) -> list:
 
 FACEBOOK_WISHES = Path(__file__).parent / "work" / "facebook-wishes.json"
 GMAIL_WISHES = Path(__file__).parent / "work" / "gmail-wishes.json"
+GMAIL_NAMES = Path(__file__).parent / "work" / "gmail-names.json"
 GMAIL_API = "https://gmail.googleapis.com/gmail/v1"
 GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
 TIMELINE = re.compile(r"(?:wrote|posted) on (.+?)['\u2019]s? timeline|(?:in|auf) (.+?) Chronik", re.IGNORECASE)
@@ -278,6 +279,22 @@ def listed_wish_rows(text: str) -> list:
                 out.append((addrs[0].lower(), dt.date(*map(int, dates[0]))))
             except ValueError:
                 pass
+    return out
+
+
+def listed_name_rows(text: str) -> list:
+    """(name, date) from listed lines that carry a full name instead of an
+    address ("Anna Muster,2009-03-12,reminder", from old birthday reminder mails)."""
+    out = []
+    for line in text.splitlines():
+        parts = [x.strip() for x in line.split(",")]
+        dates = re.findall(r"\b(\d{4})-(\d{2})-(\d{2})\b", line)
+        if "@" in line or len(dates) != 1 or len(parts) < 2 or not re.search(r"[^\W\d_]", parts[0]) or parts[0] == "MORE":
+            continue
+        try:
+            out.append((parts[0], dt.date(*map(int, dates[0]))))
+        except ValueError:
+            pass
     return out
 
 
@@ -470,7 +487,7 @@ def now() -> str:
 
 def run(api, pictures: Path, apply: bool, whatsapp_db: Path | None, log=print,
         android_rows: Path = ANDROID_WISHES, facebook_rows: Path = FACEBOOK_WISHES,
-        gmail_rows: Path = GMAIL_WISHES) -> dict:
+        gmail_rows: Path = GMAIL_WISHES, gmail_names: Path = GMAIL_NAMES) -> dict:
     people = ps.fetch_all(api, EXPORT_FIELDS + ",phoneNumbers,emailAddresses")
     iris = pictures / ".iris"
     write_atomic(iris / "contacts.vcf", vcard(people))
@@ -478,7 +495,8 @@ def run(api, pictures: Path, apply: bool, whatsapp_db: Path | None, log=print,
                "with birthday": sum(1 for p in people if is_person(p) and birthday_of(p))}
     phone = load_rows(android_rows)
     more = ([("name", n, d, "Facebook") for n, d in load_rows(facebook_rows, "name")]
-            + [("email", a, d, "Gmail") for a, d in load_rows(gmail_rows, "email")])
+            + [("email", a, d, "Gmail") for a, d in load_rows(gmail_rows, "email")]
+            + [("name", n, d, "Gmail") for n, d in load_rows(gmail_names, "name")])
     if whatsapp_db is not None or phone or more:
         try:
             mac = wish_rows(whatsapp_db) if whatsapp_db is not None else []
@@ -526,8 +544,8 @@ def main(argv=None) -> int:
     ap.add_argument("--gmail-wishes", choices=["subject", "search"], help="read your sent mail once into "
                     "work/gmail-wishes.json (address and date of each wish): subject (gmail.metadata) or search "
                     "(gmail.readonly, the whole mail matched by Gmail); only headers come back")
-    ap.add_argument("--gmail-list", type=Path, help="a text file of 'address,YYYY-MM-DD' lines (as Gemini lists your "
-                    "sent wishes), added to work/gmail-wishes.json")
+    ap.add_argument("--gmail-list", type=Path, help="a text file of 'address or full name,YYYY-MM-DD' lines (as Gemini "
+                    "lists your sent wishes and old birthday reminders), added to work/gmail-wishes.json and gmail-names.json")
     ap.add_argument("--apply", action="store_true", help="send the answers marked yes to Google")
     args = ap.parse_args(argv)
     if not (args.pictures / ".iris").is_dir():
@@ -541,9 +559,13 @@ def main(argv=None) -> int:
         save_rows(FACEBOOK_WISHES, rows, "name")
         print(f"Facebook: {len(rows)} wishes to {len({n for n, _ in rows})} names kept in {FACEBOOK_WISHES}")
     if args.gmail_list:
-        rows = load_rows(GMAIL_WISHES, "email") + listed_wish_rows(args.gmail_list.expanduser().read_text(encoding="utf-8"))
+        text = args.gmail_list.expanduser().read_text(encoding="utf-8")
+        rows = load_rows(GMAIL_WISHES, "email") + listed_wish_rows(text)
+        names = load_rows(GMAIL_NAMES, "name") + listed_name_rows(text)
         save_rows(GMAIL_WISHES, rows, "email")
-        print(f"Gmail: {len(set(rows))} wishes to {len({a for a, _ in rows})} addresses kept in {GMAIL_WISHES}")
+        save_rows(GMAIL_NAMES, names, "name")
+        print(f"Gmail: {len(set(rows))} dates for {len({a for a, _ in rows})} addresses and {len(set(names))} for "
+              f"{len({n for n, _ in names})} names kept in work/")
     secret = args.client_secret.expanduser()
     if args.gmail_wishes:
         # Ask for what the saved login has plus what this needs, so a new login takes nothing away.

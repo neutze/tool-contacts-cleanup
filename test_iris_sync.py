@@ -227,6 +227,10 @@ class GmailWishes(unittest.TestCase):
         text = "anna@x.de,2019-03-12\nBen <B@Y.org> 2020-01-02\nno date c@x.de\nd@x.de,2019-02-30\nnote: 3 more\n"
         self.assertEqual(iris.listed_wish_rows(text), [("anna@x.de", dt.date(2019, 3, 12)), ("b@y.org", dt.date(2020, 1, 2))])
 
+    def test_a_listed_name_from_a_reminder(self):
+        text = "Anna Muster,2009-03-12,reminder\nb@x.de,2010-01-01,sent-wish\nMORE\n2011-01-01\nJörg K, 2008-05-06\n"
+        self.assertEqual(iris.listed_name_rows(text), [("Anna Muster", dt.date(2009, 3, 12)), ("Jörg K", dt.date(2008, 5, 6))])
+
     def test_search_lets_gmail_match(self):
         api = self.Api({"2": self.msg("b@x.de")})
         self.assertEqual(iris.gmail_wish_rows(api, search=True), [("b@x.de", dt.date(2018, 2, 3))])
