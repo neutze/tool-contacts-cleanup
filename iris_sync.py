@@ -198,10 +198,9 @@ def load_rows(path: Path) -> list:
 
 
 def wishes(rows: list, people: list) -> list:
-    """One suggestion per contact whose number belongs to it alone and whose
-    wishes all fall on one day of the year, with the birthday Google has
-    (google, '' for none), so Iris can show both. A wish on Google's own
-    day is no suggestion."""
+    """One suggestion per contact without a birthday in Google whose number
+    belongs to it alone and whose wishes all fall on one day of the year.
+    Google's birthday stands: a contact that has one gets no suggestion."""
     owners = collections.defaultdict(set)
     for p in people:
         if is_person(p):
@@ -221,7 +220,7 @@ def wishes(rows: list, people: list) -> list:
             continue
         (month, day), years = next(iter(found.items()))
         have = birthday_of(by_rn[rn])
-        if have and (have["month"], have["day"]) == (month, day):
+        if have:
             continue
         out.append({"uid": rn, "name": full_name(by_rn[rn]), "month": month, "day": day, "years": sorted(years),
                     "google": iso(have)})

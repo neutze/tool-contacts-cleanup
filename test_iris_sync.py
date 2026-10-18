@@ -91,14 +91,14 @@ class Wishes(unittest.TestCase):
 
     def test_one_day_per_contact_without_birthday(self):
         rows = [("+4915123456789", dt.date(2023, 3, 12)), ("+4915123456789", dt.date(2024, 3, 12)),
-                ("+491601111111", dt.date(2023, 5, 5)),      # beside the birthday Google has
+                ("+491601111111", dt.date(2023, 5, 5)),      # Ben has a birthday: no suggestion
                 ("+491702222222", dt.date(2023, 6, 1)), ("+491702222222", dt.date(2024, 6, 2)),  # two days
                 ("+491703333333", dt.date(2023, 8, 8))]      # a shared number
         rows.append(("+491601111111", dt.date(2023, 1, 2)))  # on Ben's own day: no suggestion
         self.assertEqual(iris.wishes(rows[-1:], self.people), [])
         self.assertEqual(iris.wishes(rows[:-1], self.people),
                          [{"uid": "people/1", "name": "Anna M", "month": 3, "day": 12, "years": [2023, 2024], "google": ""},
-                          {"uid": "people/2", "name": "Ben K", "month": 5, "day": 5, "years": [2023], "google": "1980-01-02"}])
+                          ])  # Ben has a birthday in Google: it stands
 
     def test_query_never_selects_text(self):
         select = iris.WISH_QUERY.split("FROM")[0]
