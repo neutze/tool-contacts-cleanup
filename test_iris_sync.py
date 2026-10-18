@@ -97,8 +97,20 @@ class Wishes(unittest.TestCase):
         rows.append(("+491601111111", dt.date(2023, 1, 2)))  # on Ben's own day: no suggestion
         self.assertEqual(iris.wishes(rows[-1:], self.people), [])
         self.assertEqual(iris.wishes(rows[:-1], self.people),
-                         [{"uid": "people/1", "name": "Anna M", "month": 3, "day": 12, "years": [2023, 2024], "google": ""},
+                         [{"uid": "people/1", "name": "Anna M", "month": 3, "day": 12, "years": [2023, 2024], "google": "",
+                           "sources": ["WhatsApp"]},
                           ])  # Ben has a birthday in Google: it stands
+
+    def test_facebook_names_and_gmail_addresses(self):
+        people = self.people + [person("people/6", "Jürgen", "Ö"), person("people/7", "Fay", "B"), person("people/8", "Fay", "B")]
+        people[5]["emailAddresses"] = [{"value": "J@x.de"}]
+        more = [("name", "jurgen o", dt.date(2020, 4, 4), "Facebook"), ("email", "j@x.de ", dt.date(2021, 4, 4), "Gmail"),
+                ("name", "Fay B", dt.date(2020, 9, 9), "Facebook"),  # two contacts of that name: none
+                ("name", "Nobody", dt.date(2020, 9, 9), "Facebook")]
+        self.assertEqual(iris.wishes([("+4915123456789", dt.date(2024, 3, 12))], people, more), [
+            {"uid": "people/1", "name": "Anna M", "month": 3, "day": 12, "years": [2024], "google": "", "sources": ["WhatsApp"]},
+            {"uid": "people/6", "name": "Jürgen Ö", "month": 4, "day": 4, "years": [2020, 2021], "google": "",
+             "sources": ["Facebook", "Gmail"]}])
 
     def test_query_never_selects_text(self):
         select = iris.WISH_QUERY.split("FROM")[0]
@@ -157,6 +169,72 @@ class AndroidWishes(unittest.TestCase):
             sqlite3.connect(db).close()
             with self.assertRaises(sqlite3.DatabaseError):
                 iris.android_wish_rows(db)
+
+
+class FacebookWishes(unittest.TestCase):
+    def mangle(self, text):
+        return text.encode("utf-8").decode("latin-1")  # how Facebook's export writes it
+
+    def test_sent_one_to_one_messages_and_timeline_posts(self):
+        import zipfile
+        noon = int(dt.datetime(2015, 7, 1, 12).timestamp())
+        me = self.mangle("Jö N")
+        chat = {"participants": [{"name": me}, {"name": self.mangle("Jürgen Ö")}], "messages": [
+            {"sender_name": me, "timestamp_ms": noon * 1000, "content": "Alles Gute zum Geburtstag"},
+            {"sender_name": self.mangle("Jürgen Ö"), "timestamp_ms": noon * 1000, "content": "happy birthday"},
+            {"sender_name": me, "timestamp_ms": noon * 1000, "content": "see you"}]}
+        group = {"participants": [{"name": me}, {"name": "A"}, {"name": "B"}],
+                 "messages": [{"sender_name": me, "timestamp_ms": noon * 1000, "content": "HBD"}]}
+        other = {"participants": [{"name": me}, {"name": "C"}], "messages": []}
+        posts = [{"timestamp": noon, "title": "Jö N wrote on Ben K's timeline.", "data": [{"post": "Happy Birthday!"}]},
+                 {"timestamp": noon, "title": "Jö N hat in Annas Chronik gepostet.", "data": [{"post": "Alles Gute!"}]},
+                 {"timestamp": noon, "title": "Jö N wrote on Cem's timeline.", "data": [{"post": "Nice photo"}]}]
+        with tempfile.TemporaryDirectory() as tmp:
+            z = Path(tmp) / "facebook.zip"
+            with zipfile.ZipFile(z, "w") as f:
+                f.writestr("your_facebook_activity/messages/inbox/j_1/message_1.json", json.dumps(chat))
+                f.writestr("your_facebook_activity/messages/inbox/g_1/message_1.json", json.dumps(group))
+                f.writestr("your_facebook_activity/messages/inbox/c_1/message_1.json", json.dumps(other))
+                f.writestr("your_facebook_activity/posts/your_posts__check_ins__photos_and_videos_1.json", json.dumps(posts))
+            day = dt.date(2015, 7, 1)
+            self.assertEqual(sorted(iris.facebook_wish_rows([z])),
+                             [("Anna", day), ("Annas", day), ("Ben K", day), ("Jürgen Ö", day)])
+
+
+class GmailWishes(unittest.TestCase):
+    class Api:
+        def __init__(self, msgs):
+            self.msgs, self.calls = msgs, []
+
+        def call(self, method, path, params=()):
+            self.calls.append(dict(params))
+            if path == "/users/me/messages":
+                return {"messages": [{"id": i} for i in self.msgs]}
+            return self.msgs[path.rsplit("/", 1)[1]]
+
+    def msg(self, to, subject="Hallo", cc=""):
+        hs = [{"name": "To", "value": to}, {"name": "Subject", "value": subject}] + ([{"name": "Cc", "value": cc}] if cc else [])
+        return {"internalDate": str(int(dt.datetime(2018, 2, 3, 12).timestamp() * 1000)), "payload": {"headers": hs}}
+
+    def test_subject_walk_keeps_one_recipient(self):
+        api = self.Api({"1": self.msg("Anna <A@x.de>", "Alles Gute zum Geburtstag"), "2": self.msg("b@x.de"),
+                        "3": self.msg("c@x.de", "Happy birthday", cc="d@x.de")})
+        self.assertEqual(iris.gmail_wish_rows(api, search=False), [("a@x.de", dt.date(2018, 2, 3))])
+        self.assertEqual(api.calls[0]["labelIds"], "SENT")
+        self.assertTrue(all(c.get("format") in (None, "metadata") for c in api.calls))
+
+    def test_a_listed_line_needs_one_address_and_one_date(self):
+        text = "anna@x.de,2019-03-12\nBen <B@Y.org> 2020-01-02\nno date c@x.de\nd@x.de,2019-02-30\nnote: 3 more\n"
+        self.assertEqual(iris.listed_wish_rows(text), [("anna@x.de", dt.date(2019, 3, 12)), ("b@y.org", dt.date(2020, 1, 2))])
+
+    def test_a_listed_name_from_a_reminder(self):
+        text = "Anna Muster,2009-03-12,reminder\nb@x.de,2010-01-01,sent-wish\nMORE\n2011-01-01\nJörg K, 2008-05-06\n"
+        self.assertEqual(iris.listed_name_rows(text), [("Anna Muster", dt.date(2009, 3, 12)), ("Jörg K", dt.date(2008, 5, 6))])
+
+    def test_search_lets_gmail_match(self):
+        api = self.Api({"2": self.msg("b@x.de")})
+        self.assertEqual(iris.gmail_wish_rows(api, search=True), [("b@x.de", dt.date(2018, 2, 3))])
+        self.assertIn("in:sent", api.calls[0]["q"])
 
 
 class Answers(unittest.TestCase):

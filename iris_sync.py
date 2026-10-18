@@ -13,7 +13,9 @@ Each run:
      words are matched inside WhatsApp's database; no message text is selected.
      --android-db <msgstore.db> once reads an Android phone's decrypted backup
      the same way and keeps each wish's number and date in work/android-wishes.json,
-     which every later run adds to the Mac's wishes;
+     which every later run adds to the Mac's wishes; --facebook <zips> and
+     --gmail-list / --gmail-wishes do the same for Facebook's export and your
+     sent mail, keeping name or address and date in work/;
   3. sends, with --apply, every yes in <pictures>/.iris/contacts-answers.jsonl
      not yet in contacts-sent.jsonl, after reading the contact live. Google is
      only added to; the one overwrite is a yes on Iris's "Iris's wins" card,
@@ -27,6 +29,7 @@ from __future__ import annotations
 import argparse
 import collections
 import datetime as dt
+import email.utils
 import json
 import os
 import re
@@ -186,20 +189,157 @@ def android_wish_rows(db: Path) -> list:
     return out
 
 
-def save_rows(path: Path, rows: list) -> None:
+# ---- Facebook and Gmail wishes -------------------------------------------------
+
+FACEBOOK_WISHES = Path(__file__).parent / "work" / "facebook-wishes.json"
+GMAIL_WISHES = Path(__file__).parent / "work" / "gmail-wishes.json"
+GMAIL_NAMES = Path(__file__).parent / "work" / "gmail-names.json"
+GMAIL_API = "https://gmail.googleapis.com/gmail/v1"
+GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
+TIMELINE = re.compile(r"(?:wrote|posted) on (.+?)['\u2019]s? timeline|(?:in|auf) (.+?) Chronik", re.IGNORECASE)
+
+
+def is_wish(text) -> bool:
+    """Whether a text holds one of the wish words; the text itself goes nowhere."""
+    return isinstance(text, str) and any(w in _fb(text).lower() for w in WISH_WORDS)
+
+
+def _fb(text: str) -> str:
+    """Facebook's export writes UTF-8 as Latin-1 escapes ("JÃ¼rgen"); undo that where it applies."""
+    try:
+        return text.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+
+
+def _json_files(sources: list):
+    """(path inside, parsed JSON) of every .json in the given zips and folders."""
+    import zipfile
+    for src in sources:
+        if src.is_dir():
+            for f in sorted(src.rglob("*.json")):
+                yield f.relative_to(src).as_posix(), f.read_bytes()
+        else:
+            with zipfile.ZipFile(src) as z:
+                for name in sorted(z.namelist()):
+                    if name.endswith(".json"):
+                        yield name, z.read(name)
+
+
+def facebook_wish_rows(sources: list) -> list:
+    """(name, local date) of each birthday wish you sent on Facebook, from its
+    "Download your information" export (JSON, zips or unzipped folders): a
+    Messenger message you sent in a chat with one other person, under that
+    person's name, or a post of yours on someone's timeline, under the name in
+    its title. You are the name found in most chats. Text is only matched."""
+    threads, posts = [], []
+    for name, raw in _json_files(sources):
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(data, dict) and isinstance(data.get("messages"), list) and "participants" in data:
+            people = [_fb(x.get("name", "") if isinstance(x, dict) else str(x)) for x in data["participants"]]
+            threads.append((people, data["messages"]))
+        elif "/posts/" in f"/{name}" and isinstance(data, list):
+            posts.extend(x for x in data if isinstance(x, dict))
+    seen = collections.Counter(n for people, _ in threads for n in set(people) if n)
+    me = seen.most_common(1)[0][0] if seen else ""
+    out = []
+    for people, messages in threads:
+        others = [n for n in set(people) if n and n != me]
+        if len(set(people)) != 2 or len(others) != 1:
+            continue
+        for m in messages:
+            sender = _fb(str(m.get("sender_name", m.get("senderName", ""))))
+            ms = m.get("timestamp_ms", m.get("timestamp"))
+            if sender == me and isinstance(ms, (int, float)) and is_wish(m.get("content", m.get("text"))):
+                out.append((others[0], dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc).astimezone().date()))
+    for post in posts:
+        hit = TIMELINE.search(_fb(str(post.get("title", ""))))
+        texts = [d.get("post") for d in post.get("data", []) if isinstance(d, dict)]
+        if hit and isinstance(post.get("timestamp"), (int, float)) and any(is_wish(t) for t in texts):
+            day = dt.datetime.fromtimestamp(post["timestamp"], dt.timezone.utc).astimezone().date()
+            name = (hit.group(1) or hit.group(2)).strip()
+            out.append((name, day))
+            if hit.group(2) and name.endswith("s"):  # German genitive: "Annas Chronik"
+                out.append((name[:-1], day))
+    return out
+
+
+def listed_wish_rows(text: str) -> list:
+    """(address, date) from lines such as Gemini lists them ("anna@x.de,2019-03-12");
+    a line without one address and one YYYY-MM-DD date is passed over."""
+    out = []
+    for line in text.splitlines():
+        addrs = re.findall(r"[\w.+'-]+@[\w-]+(?:\.[\w-]+)+", line)
+        dates = re.findall(r"\b(\d{4})-(\d{2})-(\d{2})\b", line)
+        if len(set(a.lower() for a in addrs)) == 1 and len(dates) == 1:
+            try:
+                out.append((addrs[0].lower(), dt.date(*map(int, dates[0]))))
+            except ValueError:
+                pass
+    return out
+
+
+def listed_name_rows(text: str) -> list:
+    """(name, date) from listed lines that carry a full name instead of an
+    address ("Anna Muster,2009-03-12,reminder", from old birthday reminder mails)."""
+    out = []
+    for line in text.splitlines():
+        parts = [x.strip() for x in line.split(",")]
+        dates = re.findall(r"\b(\d{4})-(\d{2})-(\d{2})\b", line)
+        if "@" in line or len(dates) != 1 or len(parts) < 2 or not re.search(r"[^\W\d_]", parts[0]) or parts[0] == "MORE":
+            continue
+        try:
+            out.append((parts[0], dt.date(*map(int, dates[0]))))
+        except ValueError:
+            pass
+    return out
+
+
+def gmail_wish_rows(api, search: bool) -> list:
+    """(address, local date) of each birthday wish you mailed to one address
+    alone. With search (the gmail.readonly login) Gmail matches the words in
+    the whole mail; else (gmail.metadata) only the subject can be matched,
+    walking the SENT label. Either way only the headers come back, never a body."""
+    out, token = [], None
+    query = "in:sent (" + " OR ".join(f'"{w}"' for w in WISH_WORDS) + ")"
+    headers = [("metadataHeaders", "To"), ("metadataHeaders", "Cc")] + ([] if search else [("metadataHeaders", "Subject")])
+    while True:
+        params = [("maxResults", 500)] + ([("q", query)] if search else [("labelIds", "SENT")])
+        page = api.call("GET", "/users/me/messages", params=params + ([("pageToken", token)] if token else []))
+        for m in page.get("messages", []):
+            msg = api.call("GET", f"/users/me/messages/{m['id']}", params=[("format", "metadata")] + headers)
+            hs = msg.get("payload", {}).get("headers", [])
+            if not search and not is_wish(" ".join(h["value"] for h in hs if h["name"].lower() == "subject")):
+                continue
+            to = {a.strip().lower() for _, a in email.utils.getaddresses(
+                [h["value"] for h in hs if h["name"].lower() in ("to", "cc")]) if "@" in a}
+            if len(to) == 1 and msg.get("internalDate"):
+                out.append((to.pop(), dt.datetime.fromtimestamp(int(msg["internalDate"]) / 1000,
+                                                                 dt.timezone.utc).astimezone().date()))
+        token = page.get("nextPageToken")
+        if not token:
+            return out
+
+
+def save_rows(path: Path, rows: list, field: str = "number") -> None:
     unique = sorted({(n, d.isoformat()) for n, d in rows})
-    write_atomic(path, json.dumps([{"number": n, "date": d} for n, d in unique], indent=1) + "\n")
+    write_atomic(path, json.dumps([{field: n, "date": d} for n, d in unique], ensure_ascii=False, indent=1) + "\n")
 
 
-def load_rows(path: Path) -> list:
+def load_rows(path: Path, field: str = "number") -> list:
     if not path.exists():
         return []
-    return [(r["number"], dt.date.fromisoformat(r["date"])) for r in json.loads(path.read_text(encoding="utf-8"))]
+    return [(r[field], dt.date.fromisoformat(r["date"])) for r in json.loads(path.read_text(encoding="utf-8"))]
 
 
-def wishes(rows: list, people: list) -> list:
-    """One suggestion per contact without a birthday in Google whose number
-    belongs to it alone and whose wishes all fall on one day of the year.
+def wishes(rows: list, people: list, more: list = ()) -> list:
+    """One suggestion per contact without a birthday in Google whose wishes all
+    fall on one day of the year. `rows` are WhatsApp's (number, date); `more`
+    are (kind, key, date, source) from the other sources, kind "phone",
+    "email" or "name". A key counts only when it belongs to one contact alone.
     Google's birthday stands: a contact that has one gets no suggestion."""
     owners = collections.defaultdict(set)
     for p in people:
@@ -207,13 +347,22 @@ def wishes(rows: list, people: list) -> list:
             for ph in p.get("phoneNumbers", []):
                 key = ps.phone_key(ph.get("value", ""))
                 if key:
-                    owners[key].add(p["resourceName"])
+                    owners["phone", key].add(p["resourceName"])
+            for em in p.get("emailAddresses", []):
+                if "@" in em.get("value", ""):
+                    owners["email", em["value"].strip().lower()].add(p["resourceName"])
+            if full_name(p):
+                owners["name", ps.fold(full_name(p))].add(p["resourceName"])
     by_rn = {p["resourceName"]: p for p in people}
     days = collections.defaultdict(lambda: collections.defaultdict(set))
-    for number, date in rows:
-        rns = owners.get(ps.phone_key(number), set())
+    sources = collections.defaultdict(set)
+    for kind, key, date, source in [("phone", n, d, "WhatsApp") for n, d in rows] + list(more):
+        norm = ps.phone_key(key) if kind == "phone" else ps.fold(key) if kind == "name" else key.strip().lower()
+        rns = owners.get((kind, norm), set())
         if len(rns) == 1:
-            days[next(iter(rns))][(date.month, date.day)].add(date.year)
+            rn = next(iter(rns))
+            days[rn][(date.month, date.day)].add(date.year)
+            sources[rn].add(source)
     out = []
     for rn, found in sorted(days.items()):
         if len(found) != 1:
@@ -223,7 +372,7 @@ def wishes(rows: list, people: list) -> list:
         if have:
             continue
         out.append({"uid": rn, "name": full_name(by_rn[rn]), "month": month, "day": day, "years": sorted(years),
-                    "google": iso(have)})
+                    "google": iso(have), "sources": sorted(sources[rn])})
     return out
 
 
@@ -337,17 +486,21 @@ def now() -> str:
 # ---- the run -----------------------------------------------------------------
 
 def run(api, pictures: Path, apply: bool, whatsapp_db: Path | None, log=print,
-        android_rows: Path = ANDROID_WISHES) -> dict:
-    people = ps.fetch_all(api, EXPORT_FIELDS + ",phoneNumbers")
+        android_rows: Path = ANDROID_WISHES, facebook_rows: Path = FACEBOOK_WISHES,
+        gmail_rows: Path = GMAIL_WISHES, gmail_names: Path = GMAIL_NAMES) -> dict:
+    people = ps.fetch_all(api, EXPORT_FIELDS + ",phoneNumbers,emailAddresses")
     iris = pictures / ".iris"
     write_atomic(iris / "contacts.vcf", vcard(people))
     summary = {"contacts": sum(1 for p in people if is_person(p)),
                "with birthday": sum(1 for p in people if is_person(p) and birthday_of(p))}
     phone = load_rows(android_rows)
-    if whatsapp_db is not None or phone:
+    more = ([("name", n, d, "Facebook") for n, d in load_rows(facebook_rows, "name")]
+            + [("email", a, d, "Gmail") for a, d in load_rows(gmail_rows, "email")]
+            + [("name", n, d, "Gmail") for n, d in load_rows(gmail_names, "name")])
+    if whatsapp_db is not None or phone or more:
         try:
             mac = wish_rows(whatsapp_db) if whatsapp_db is not None else []
-            found = wishes(sorted(set(mac + phone)), people)
+            found = wishes(sorted(set(mac + phone)), people, more)
             write_atomic(iris / "contacts-wishes.json", json.dumps(found, ensure_ascii=False, indent=1) + "\n")
             summary["wishes"] = len(found)
         except (sqlite3.Error, OSError) as e:
@@ -386,6 +539,13 @@ def main(argv=None) -> int:
     ap.add_argument("--no-whatsapp", action="store_true")
     ap.add_argument("--android-db", type=Path, help="an Android phone's decrypted msgstore.db, read once into "
                     "work/android-wishes.json (number and date of each wish)")
+    ap.add_argument("--facebook", type=Path, nargs="+", help="Facebook's JSON export (zips or folders), read once into "
+                    "work/facebook-wishes.json (name and date of each wish)")
+    ap.add_argument("--gmail-wishes", choices=["subject", "search"], help="read your sent mail once into "
+                    "work/gmail-wishes.json (address and date of each wish): subject (gmail.metadata) or search "
+                    "(gmail.readonly, the whole mail matched by Gmail); only headers come back")
+    ap.add_argument("--gmail-list", type=Path, help="a text file of 'address or full name,YYYY-MM-DD' lines (as Gemini "
+                    "lists your sent wishes and old birthday reminders), added to work/gmail-wishes.json and gmail-names.json")
     ap.add_argument("--apply", action="store_true", help="send the answers marked yes to Google")
     args = ap.parse_args(argv)
     if not (args.pictures / ".iris").is_dir():
@@ -394,7 +554,28 @@ def main(argv=None) -> int:
         rows = android_wish_rows(args.android_db.expanduser())
         save_rows(ANDROID_WISHES, rows)
         print(f"Android: {len(rows)} wishes in {len({n for n, _ in rows})} chats kept in {ANDROID_WISHES}")
+    if args.facebook:
+        rows = facebook_wish_rows([f.expanduser() for f in args.facebook])
+        save_rows(FACEBOOK_WISHES, rows, "name")
+        print(f"Facebook: {len(rows)} wishes to {len({n for n, _ in rows})} names kept in {FACEBOOK_WISHES}")
+    if args.gmail_list:
+        text = args.gmail_list.expanduser().read_text(encoding="utf-8")
+        rows = load_rows(GMAIL_WISHES, "email") + listed_wish_rows(text)
+        names = load_rows(GMAIL_NAMES, "name") + listed_name_rows(text)
+        save_rows(GMAIL_WISHES, rows, "email")
+        save_rows(GMAIL_NAMES, names, "name")
+        print(f"Gmail: {len(set(rows))} dates for {len({a for a, _ in rows})} addresses and {len(set(names))} for "
+              f"{len({n for n, _ in names})} names kept in work/")
     secret = args.client_secret.expanduser()
+    if args.gmail_wishes:
+        # Ask for what the saved login has plus what this needs, so a new login takes nothing away.
+        had = json.loads(ps.TOKEN_PATH.read_text()).get("scope", "").split() if ps.TOKEN_PATH.exists() else []
+        need = [ps.SCOPE, GMAIL_READONLY if args.gmail_wishes == "search" else ps.GMAIL_SCOPE]
+        scope = " ".join(dict.fromkeys(had + need))
+        gmail = ps.Api(ps.access_token(secret, scope), GMAIL_API)
+        rows = load_rows(GMAIL_WISHES, "email") + gmail_wish_rows(gmail, args.gmail_wishes == "search")
+        save_rows(GMAIL_WISHES, rows, "email")
+        print(f"Gmail: {len(rows)} wishes to {len({a for a, _ in rows})} addresses kept in {GMAIL_WISHES}")
     token = ps.access_token if sys.stdin.isatty() else job_token  # a job never waits on a browser
     api = ps.Api(token(secret), refresh=lambda: token(secret, force_refresh=True))
     db = None if args.no_whatsapp or not args.whatsapp_db.exists() else args.whatsapp_db
