@@ -230,6 +230,7 @@ class GmailWishes(unittest.TestCase):
     def test_a_listed_name_from_a_reminder(self):
         text = "Anna Muster,2009-03-12,reminder\nb@x.de,2010-01-01,sent-wish\nMORE\n2011-01-01\nJörg K, 2008-05-06\n"
         self.assertEqual(iris.listed_name_rows(text), [("Anna Muster", dt.date(2009, 3, 12)), ("Jörg K", dt.date(2008, 5, 6))])
+        self.assertEqual(iris.listed_name_rows("Cem S,10-19\nDora A,13-40\n"), [("Cem S", dt.date(2000, 10, 19))])
 
     def test_search_lets_gmail_match(self):
         api = self.Api({"2": self.msg("b@x.de")})
@@ -257,7 +258,9 @@ class Answers(unittest.TestCase):
         return iris.read_jsonl(self.pictures / ".iris/contacts-sent.jsonl")
 
     def run_(self, api, apply=True):
-        return iris.run(api, self.pictures, apply, None, log=lambda *_: None, android_rows=self.pictures / "none.json")
+        return iris.run(api, self.pictures, apply, None, log=lambda *_: None, android_rows=self.pictures / "none.json",
+                        facebook_rows=self.pictures / "none.json", gmail_rows=self.pictures / "none.json",
+                        gmail_names=self.pictures / "none.json")
 
     def test_adds_a_missing_birthday_once(self):
         api = FakeApi([person("people/1", "Anna", "M")])
