@@ -284,11 +284,13 @@ def listed_wish_rows(text: str) -> list:
 
 def listed_name_rows(text: str) -> list:
     """(name, date) from listed lines that carry a full name instead of an
-    address ("Anna Muster,2009-03-12,reminder", from old birthday reminder mails)."""
+    address ("Anna Muster,2009-03-12,reminder", from old birthday reminder mails,
+    or "Anna Muster,03-12" typed from Facebook's birthdays page, kept under 2000)."""
     out = []
     for line in text.splitlines():
         parts = [x.strip() for x in line.split(",")]
-        dates = re.findall(r"\b(\d{4})-(\d{2})-(\d{2})\b", line)
+        dates = re.findall(r"\b(\d{4})-(\d{2})-(\d{2})\b", line) or [
+            ("2000", m, d) for m, d in re.findall(r"(?<![\d-])(\d{2})-(\d{2})(?![\d-])", line)]  # a day without a year
         if "@" in line or len(dates) != 1 or len(parts) < 2 or not re.search(r"[^\W\d_]", parts[0]) or parts[0] == "MORE":
             continue
         try:
